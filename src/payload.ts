@@ -7,7 +7,7 @@ export async function payloadRequest<T>(
   body?: unknown
 ): Promise<T> {
   const token = await getToken();
-  const { data } = await axios.request({
+  const { data } = await axios.request<T>({
     method,
     url: `${process.env.PAYLOAD_HOST}/api${path}`,
     headers: {
