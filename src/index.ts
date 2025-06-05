@@ -24,7 +24,7 @@ type JsonRpcResponse =
 const app = express();
 app.use(express.json());
 
-app.post("/mcp", async (req, res) => {
+app.post("/mcp", async (req: any, res: any) => {
   const { id, method, params } = req.body as JsonRpcRequest;
   let result: unknown;
   try {
