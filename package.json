@@ -1,26 +1,50 @@
 {
-  "name": "payloadcms-mcp",
+  "name": "payloadcms-mcp-server",
   "version": "1.0.0",
-  "description": "MCP PayloadCMS server",
-  "main": "dist/index.js",
+  "description": "Model Context Protocol server for PayloadCMS content generation and management",
+  "main": "dist/main.js",
   "scripts": {
-    "start": "node dist/index.js",
     "build": "tsc",
-    "dev": "ts-node src/index.ts",
-    "test": "echo \"No tests configured\""
+    "dev": "tsx src/main.ts",
+    "start": "node dist/main.js",
+    "test": "node test-server.js",
+    "type-check": "tsc --noEmit",
+    "lint": "eslint src/**/*.ts",
+    "lint:fix": "eslint src/**/*.ts --fix"
   },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
-  "type": "commonjs",
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "payloadcms",
+    "typescript",
+    "content-management",
+    "lexical"
+  ],
+  "author": "Your Name",
+  "license": "MIT",
   "dependencies": {
-    "express": "^4.18.2",
-    "axios": "^1.6.2",
-    "dotenv": "^16.3.1",
-    "ts-node": "^10.9.1",
-    "typescript": "^5.4.2",
-    "@types/node": "^20.10.6",
-    "@lexical/html": "^0.15.0",
-    "jsdom": "^22.1.0"
+    "@faker-js/faker": "^8.4.1",
+    "@lexical/headless": "^0.32.1",
+    "@lexical/link": "^0.32.1",
+    "@lexical/list": "^0.32.1",
+    "@lexical/rich-text": "^0.32.1",
+    "@modelcontextprotocol/sdk": "^1.12.1",
+    "axios": "^1.9.0",
+    "dotenv": "^16.5.0",
+    "lexical": "^0.32.1",
+    "uuid": "^9.0.1",
+    "zod": "^3.25.51"
+  },
+  "devDependencies": {
+    "@types/node": "^20.17.57",
+    "@types/uuid": "^9.0.8",
+    "@typescript-eslint/eslint-plugin": "^6.21.0",
+    "@typescript-eslint/parser": "^6.21.0",
+    "eslint": "^8.57.1",
+    "tsx": "^4.19.4",
+    "typescript": "^5.8.3"
+  },
+  "engines": {
+    "node": ">=18.0.0"
   }
 }
