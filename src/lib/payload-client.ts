@@ -11,7 +11,7 @@ import { z } from 'zod';
 // Configuration schema
 const PayloadConfigSchema = z.object({
   host: z.string().url(),
-  username: z.string().optional(),
+  email: z.string().optional(),
   password: z.string().optional(),
   apiKey: z.string().optional(),
 });
@@ -135,9 +135,14 @@ export class PayloadCMSClient {
   async initialize(): Promise<void> {
     if (this.isInitialized) return;
 
-    // If using username/password, authenticate to get token
-    if (this.config.username && this.config.password && !this.config.apiKey) {
+    // If using email/password, authenticate to get token
+    if (this.config.email && this.config.password && !this.config.apiKey) {
+      console.log(`Authenticating with PayloadCMS using email: ${this.config.email}`);
       await this.authenticate();
+    } else if (this.config.apiKey) {
+      console.log('Using API key for PayloadCMS authentication');
+    } else {
+      throw new Error('PayloadCMS authentication credentials missing. Provide either email/password or apiKey');
     }
 
     this.isInitialized = true;
@@ -145,15 +150,24 @@ export class PayloadCMSClient {
 
   private async authenticate(): Promise<void> {
     try {
+      console.log(`Attempting to authenticate with ${this.config.host}/api/users/login`);
       const response = await this.client.post('/users/login', {
-        email: this.config.username,
+        email: this.config.email,
         password: this.config.password,
       });
 
       const authData = AuthResponseSchema.parse(response.data);
       this.token = authData.token;
-    } catch (error) {
-      throw new Error(`Failed to authenticate with PayloadCMS: ${error}`);
+      console.log('Authentication successful, token obtained');
+    } catch (error: any) {
+      if (error.response) {
+        console.error('Authentication failed with status:', error.response.status);
+        console.error('Response data:', error.response.data);
+        throw new Error(`PayloadCMS authentication failed: ${error.response.status} - ${JSON.stringify(error.response.data)}`);
+      } else {
+        console.error('Authentication network error:', error.message);
+        throw new Error(`Failed to connect to PayloadCMS for authentication: ${error.message}`);
+      }
     }
   }
 

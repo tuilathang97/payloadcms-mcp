@@ -7,12 +7,173 @@ import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
 } from '@modelcontextprotocol/sdk/types.js';
+import { bootstrap, bootstrapFull, getSampleContents } from './tools/bootstrap-tools.js';
 
 // Load environment variables
 config();
 
 // Tool definitions
 const tools = [
+  {
+    name: 'bootstrap',
+    description: 'Create essential business website pages (10+ pages) with practical block combinations. This tool creates all essential pages for a business website including Home, About, Services, Contact, Blog, Privacy Policy, Terms & Conditions, FAQ, and more based on website type and requirements.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        projectPath: {
+          type: 'string',
+          description: 'Absolute path to the PayloadCMS project directory'
+        },
+        websiteType: {
+          type: 'string',
+          enum: ['business', 'ecommerce', 'blog', 'portfolio', 'minimal'],
+          description: 'Type of website to bootstrap',
+          default: 'business'
+        },
+        includeEcommerce: {
+          type: 'boolean',
+          description: 'Include e-commerce pages and functionality',
+          default: false
+        },
+        includeBlog: {
+          type: 'boolean',
+          description: 'Include blog pages and posts',
+          default: true
+        },
+        includeJobs: {
+          type: 'boolean',
+          description: 'Include careers/jobs pages',
+          default: false
+        },
+        businessInfo: {
+          type: 'object',
+          description: 'Business information for content generation',
+          properties: {
+            name: { type: 'string', description: 'Business name' },
+            industry: { type: 'string', description: 'Industry sector' },
+            description: { type: 'string', description: 'Business description' }
+          }
+        },
+        contentQuality: {
+          type: 'string',
+          enum: ['low', 'medium', 'high'],
+          description: 'Quality level of generated content',
+          default: 'medium'
+        },
+        resolveRelationships: {
+          type: 'boolean',
+          description: 'Automatically resolve content relationships',
+          default: true
+        }
+      },
+      required: ['projectPath']
+    }
+  },
+  {
+    name: 'bootstrap-full',
+    description: 'Create comprehensive dataset with all collections and block variations. This tool generates extensive sample content across all available collections with multiple layout variations for testing and development purposes.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        projectPath: {
+          type: 'string',
+          description: 'Absolute path to the PayloadCMS project directory'
+        },
+        collections: {
+          oneOf: [
+            { type: 'string', enum: ['all'] },
+            { type: 'array', items: { type: 'string' } }
+          ],
+          description: 'Collections to include: "all" or array of collection slugs',
+          default: 'all'
+        },
+        blocksPerCollection: {
+          type: 'number',
+          description: 'Number of documents to create per collection',
+          default: 3,
+          minimum: 1,
+          maximum: 10
+        },
+        includeAllLayoutVariations: {
+          type: 'boolean',
+          description: 'Create all available layout variations for blocks',
+          default: true
+        },
+        createRelationships: {
+          type: 'boolean',
+          description: 'Create and resolve content relationships',
+          default: true
+        },
+        uploadPlaceholderMedia: {
+          type: 'boolean',
+          description: 'Create placeholder media files',
+          default: true
+        },
+        contentQuality: {
+          type: 'string',
+          enum: ['low', 'medium', 'high'],
+          description: 'Quality level of generated content',
+          default: 'medium'
+        },
+        continueOnError: {
+          type: 'boolean',
+          description: 'Continue processing if some operations fail',
+          default: true
+        }
+      },
+      required: ['projectPath']
+    }
+  },
+  {
+    name: 'get-sample-contents',
+    description: 'Retrieve and export all sample content URLs and metadata from a PayloadCMS project. This tool queries existing collections and returns formatted content listings with URLs, metadata, and export options.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        projectPath: {
+          type: 'string',
+          description: 'Absolute path to the PayloadCMS project directory'
+        },
+        collections: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Specific collections to include (optional, defaults to all)'
+        },
+        groupByCollection: {
+          type: 'boolean',
+          description: 'Group results by collection type',
+          default: true
+        },
+        format: {
+          type: 'string',
+          enum: ['json', 'csv', 'sitemap'],
+          description: 'Output format for the content listing',
+          default: 'json'
+        },
+        includeMetadata: {
+          type: 'boolean',
+          description: 'Include additional metadata in output',
+          default: false
+        },
+        includeBlockDetails: {
+          type: 'boolean',
+          description: 'Include block/layout details for pages',
+          default: false
+        },
+        validateUrls: {
+          type: 'boolean',
+          description: 'Validate generated URLs match routing patterns',
+          default: false
+        },
+        customUrlPatterns: {
+          type: 'object',
+          description: 'Custom URL patterns for specific collections',
+          additionalProperties: { type: 'string' }
+        }
+      },
+      required: ['projectPath']
+    }
+  },
   {
     name: 'createBlockSampleContent',
     description: 'Generate sample content for PayloadCMS block configurations',
@@ -180,6 +341,15 @@ class PayloadCMSMCPServer {
 
       try {
         switch (name) {
+          case 'bootstrap':
+            return await this.handleBootstrap(args);
+          
+          case 'bootstrap-full':
+            return await this.handleBootstrapFull(args);
+          
+          case 'get-sample-contents':
+            return await this.handleGetSampleContents(args);
+          
           case 'createBlockSampleContent':
             return await this.handleCreateBlockSampleContent(args);
           
@@ -209,6 +379,75 @@ class PayloadCMSMCPServer {
         };
       }
     });
+  }
+
+  private async handleBootstrap(args: any) {
+    try {
+      const result = await bootstrap(args);
+      return {
+        content: [
+          {
+            type: 'text',
+            text: JSON.stringify(result, null, 2),
+          },
+        ],
+      };
+    } catch (error) {
+      return {
+        content: [
+          {
+            type: 'text',
+            text: `Error in bootstrap: ${error instanceof Error ? error.message : 'Unknown error'}`,
+          },
+        ],
+      };
+    }
+  }
+
+  private async handleBootstrapFull(args: any) {
+    try {
+      const result = await bootstrapFull(args);
+      return {
+        content: [
+          {
+            type: 'text',
+            text: JSON.stringify(result, null, 2),
+          },
+        ],
+      };
+    } catch (error) {
+      return {
+        content: [
+          {
+            type: 'text',
+            text: `Error in bootstrap-full: ${error instanceof Error ? error.message : 'Unknown error'}`,
+          },
+        ],
+      };
+    }
+  }
+
+  private async handleGetSampleContents(args: any) {
+    try {
+      const result = await getSampleContents(args);
+      return {
+        content: [
+          {
+            type: 'text',
+            text: JSON.stringify(result, null, 2),
+          },
+        ],
+      };
+    } catch (error) {
+      return {
+        content: [
+          {
+            type: 'text',
+            text: `Error in get-sample-contents: ${error instanceof Error ? error.message : 'Unknown error'}`,
+          },
+        ],
+      };
+    }
   }
 
   private async handleCreateBlockSampleContent(args: any) {
