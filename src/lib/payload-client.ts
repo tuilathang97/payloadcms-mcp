@@ -7,6 +7,7 @@
 
 import axios, { AxiosInstance } from 'axios';
 import { z } from 'zod';
+import { logger } from '../utils/logger.js';
 
 // Configuration schema
 const PayloadConfigSchema = z.object({
@@ -21,6 +22,7 @@ type PayloadConfig = z.infer<typeof PayloadConfigSchema>;
 // PayloadCMS API response schemas
 const AuthResponseSchema = z.object({
   token: z.string(),
+  exp: z.number().optional(),
   user: z.object({
     id: z.string(),
     email: z.string(),
@@ -114,15 +116,36 @@ export class PayloadCMSClient {
       if (this.token) {
         config.headers!.Authorization = `JWT ${this.token}`;
       } else if (this.config.apiKey) {
+        // Fallback to API key if no token
         config.headers!.Authorization = `Bearer ${this.config.apiKey}`;
       }
+      
+      // Log the request
+      logger.payloadRequest(config.method?.toUpperCase() || 'GET', config.url || '', config.data);
+      
       return config;
     });
 
     // Add response interceptor for error handling
     this.client.interceptors.response.use(
-      (response: any) => response,
+      (response: any) => {
+        // Log successful responses
+        logger.payloadResponse(
+          response.config?.method?.toUpperCase() || 'GET',
+          response.config?.url || '',
+          response.status,
+          response.data
+        );
+        return response;
+      },
       (error: any) => {
+        // Log error responses
+        logger.payloadError(
+          error.config?.method?.toUpperCase() || 'GET',
+          error.config?.url || '',
+          error
+        );
+        
         if (error.response?.status === 401) {
           this.token = undefined as any;
           throw new Error('Authentication failed. Please check your credentials.');
@@ -135,12 +158,20 @@ export class PayloadCMSClient {
   async initialize(): Promise<void> {
     if (this.isInitialized) return;
 
-    // If using email/password, authenticate to get token
-    if (this.config.email && this.config.password && !this.config.apiKey) {
-      console.log(`Authenticating with PayloadCMS using email: ${this.config.email}`);
+    logger.info('PayloadClient', 'Initializing PayloadCMS client', {
+      host: this.config.host,
+      hasApiKey: !!this.config.apiKey,
+      hasEmail: !!this.config.email,
+      hasPassword: !!this.config.password,
+      apiKeyLength: this.config.apiKey ? this.config.apiKey.length : 0
+    });
+
+    // Always authenticate with email/password for JWT token (most reliable)
+    if (this.config.email && this.config.password) {
+      logger.info('PayloadClient', `Authenticating with PayloadCMS using email: ${this.config.email}`);
       await this.authenticate();
     } else if (this.config.apiKey) {
-      console.log('Using API key for PayloadCMS authentication');
+      logger.info('PayloadClient', 'Using API key for PayloadCMS authentication');
     } else {
       throw new Error('PayloadCMS authentication credentials missing. Provide either email/password or apiKey');
     }
@@ -150,7 +181,7 @@ export class PayloadCMSClient {
 
   private async authenticate(): Promise<void> {
     try {
-      console.log(`Attempting to authenticate with ${this.config.host}/api/users/login`);
+      logger.info('PayloadAuth', `Attempting to authenticate with ${this.config.host}/api/users/login`);
       const response = await this.client.post('/users/login', {
         email: this.config.email,
         password: this.config.password,
@@ -158,14 +189,23 @@ export class PayloadCMSClient {
 
       const authData = AuthResponseSchema.parse(response.data);
       this.token = authData.token;
-      console.log('Authentication successful, token obtained');
+      
+      logger.payloadAuth(true, 'jwt', {
+        userId: authData.user.id,
+        userEmail: authData.user.email,
+        tokenLength: this.token.length,
+        expiresAt: authData.exp ? new Date(authData.exp * 1000).toISOString() : 'unknown'
+      });
     } catch (error: any) {
+      logger.payloadAuth(false, 'jwt', {
+        status: error.response?.status,
+        statusText: error.response?.statusText,
+        data: error.response?.data
+      });
+      
       if (error.response) {
-        console.error('Authentication failed with status:', error.response.status);
-        console.error('Response data:', error.response.data);
         throw new Error(`PayloadCMS authentication failed: ${error.response.status} - ${JSON.stringify(error.response.data)}`);
       } else {
-        console.error('Authentication network error:', error.message);
         throw new Error(`Failed to connect to PayloadCMS for authentication: ${error.message}`);
       }
     }
@@ -233,9 +273,19 @@ export class PayloadCMSClient {
     this.ensureInitialized();
 
     try {
+      console.log(`Creating document in collection '${collection}' with data:`, JSON.stringify(data, null, 2));
       const response = await this.client.post(`/${collection}`, data);
+      console.log(`Successfully created document in '${collection}':`, response.data.doc?.id);
       return DocumentSchema.parse(response.data.doc);
-    } catch (error) {
+    } catch (error: any) {
+      console.error(`Failed to create document in collection '${collection}':`, {
+        status: error.response?.status,
+        statusText: error.response?.statusText,
+        data: error.response?.data,
+        headers: error.response?.headers,
+        url: error.config?.url,
+        method: error.config?.method
+      });
       throw new Error(`Failed to create document in collection '${collection}': ${error}`);
     }
   }
@@ -278,13 +328,23 @@ export class PayloadCMSClient {
     formData.append('file', blob, filename);
 
     try {
+      console.log(`Uploading file '${filename}' to collection '${collection}'`);
       const response = await this.client.post(`/${collection}`, formData, {
         headers: {
           'Content-Type': 'multipart/form-data',
         },
       });
+      console.log(`Successfully uploaded file '${filename}':`, response.data.doc?.id);
       return DocumentSchema.parse(response.data.doc);
-    } catch (error) {
+    } catch (error: any) {
+      console.error(`Failed to upload file '${filename}' to collection '${collection}':`, {
+        status: error.response?.status,
+        statusText: error.response?.statusText,
+        data: error.response?.data,
+        headers: error.response?.headers,
+        url: error.config?.url,
+        method: error.config?.method
+      });
       throw new Error(`Failed to upload file '${filename}': ${error}`);
     }
   }

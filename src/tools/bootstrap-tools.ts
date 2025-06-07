@@ -1,76 +1,16 @@
 /**
  * Bootstrap Tools for PayloadCMS MCP Server
  * 
- * Implementation of bootstrap, bootstrap-full, and get-sample-contents tools
- * following TDD approach based on the tests in tests/ directory
+ * Progressive context gathering implementation that dynamically discovers
+ * and analyzes PayloadCMS project configurations before generating content
  */
 
 import { PayloadCMSClient } from '../lib/payload-client.js';
 import { ContentGenerator } from '../lib/content-generator.js';
 import { RelationshipManager } from '../lib/relationship-manager.js';
-import { ConfigParser } from '../lib/config-parser.js';
-import * as fs from 'fs';
-import * as path from 'path';
-// Get current file directory for resolving paths 
-// Note: For ES modules in Node.js, we use __dirname alternative
-const __dirname = path.dirname(new URL(import.meta.url).pathname);
-
-// Helper function to upload placeholder image
-async function uploadPlaceholderImage(payloadClient: PayloadCMSClient, suffix?: string): Promise<any> {
-  try {
-    // Get path to placeholder image (go up from dist/tools/ to public/)
-    const projectRoot = path.resolve(__dirname, '../../');
-    const placeholderPath = path.join(projectRoot, 'public', 'placeholder-image.png');
-    
-    if (!fs.existsSync(placeholderPath)) {
-      console.warn(`Placeholder image not found at ${placeholderPath}, creating fallback media entry`);
-      return await payloadClient.create('media', {
-        filename: suffix ? `placeholder-${suffix}.png` : 'placeholder.png',
-        alt: `Placeholder image${suffix ? ` ${suffix}` : ''}`,
-        url: 'https://via.placeholder.com/800x600'
-      });
-    }
-
-    // Read the image file
-    const imageBuffer = fs.readFileSync(placeholderPath);
-    const filename = suffix ? `placeholder-image-${suffix}.png` : 'placeholder-image.png';
-    
-    // Upload the actual file to PayloadCMS
-    const uploadedMedia = await payloadClient.uploadFile(
-      imageBuffer,
-      filename,
-      'image/png',
-      'media'
-    );
-
-    return uploadedMedia;
-  } catch (error) {
-    console.warn('Failed to upload placeholder image, creating fallback:', error);
-    // Fallback to creating media entry without actual file
-    return await payloadClient.create('media', {
-      filename: suffix ? `placeholder-${suffix}.png` : 'placeholder-image.png',
-      alt: `Placeholder image${suffix ? ` ${suffix}` : ''}`,
-      url: 'https://via.placeholder.com/800x600'
-    });
-  }
-}
-
-// Helper function to upload multiple placeholder images
-async function uploadMultiplePlaceholderImages(payloadClient: PayloadCMSClient, count: number = 3): Promise<any[]> {
-  const uploadedImages = [];
-  
-  for (let i = 0; i < count; i++) {
-    try {
-      const suffix = i === 0 ? undefined : `${i + 1}`;
-      const uploaded = await uploadPlaceholderImage(payloadClient, suffix);
-      uploadedImages.push(uploaded);
-    } catch (error) {
-      console.warn(`Failed to upload placeholder image ${i + 1}:`, error);
-    }
-  }
-  
-  return uploadedImages;
-}
+import { contextGatherer, ContextGatheringRequest, ConfigFile } from '../lib/context-gatherer.js';
+import { PayloadConfig, PayloadCollection, PayloadBlock } from '../lib/config-parser.js';
+import { uploadMainPlaceholderImage } from '../utils/media-upload.js';
 
 // Tool implementations
 
@@ -84,14 +24,45 @@ export async function bootstrap(input: any): Promise<any> {
       includeJobs = false,
       businessInfo,
       contentQuality = 'medium',
-      resolveRelationships = true
+      resolveRelationships = true,
+      step = 'discover_config',
+      configurationFiles
     } = input;
 
-    // Validate inputs
-    if (!projectPath) {
+    // Progressive context gathering - start with project discovery
+    const contextRequest: ContextGatheringRequest = {
+      projectPath,
+      step,
+      configurationFiles: configurationFiles?.map((file: any) => ({
+        path: file.path,
+        content: file.content,
+        type: file.type || 'config'
+      } as ConfigFile))
+    };
+
+    const contextResponse = await contextGatherer.gatherContext(contextRequest);
+
+    // Return early if we need more context
+    if (contextResponse.status === 'needs_context') {
       return {
         success: false,
-        error: 'Project path is required'
+        status: 'needs_context',
+        message: contextResponse.message,
+        requiredFiles: contextResponse.requiredFiles,
+        nextStep: contextResponse.nextStep,
+        discoveredConfig: contextResponse.discoveredConfig,
+        error: contextResponse.error
+      };
+    }
+
+    // If we don't have complete config yet, return in_progress
+    if (contextResponse.status === 'in_progress') {
+      return {
+        success: false,
+        status: 'in_progress',
+        message: contextResponse.message,
+        discoveredConfig: contextResponse.discoveredConfig,
+        parsedConfig: contextResponse.parsedConfig
       };
     }
 
@@ -106,10 +77,36 @@ export async function bootstrap(input: any): Promise<any> {
       };
     }
 
+    // We have complete configuration - check if this is just discovery or actual content generation
+    const { parsedConfig, discoveredConfig, sampleContent } = contextResponse;
+    
+    if (!parsedConfig || !discoveredConfig) {
+      return {
+        success: false,
+        error: 'Missing parsed configuration data'
+      };
+    }
+
+    // If step is discover_config, return the sample content structure without creating actual content
+    if (step === 'discover_config') {
+      return {
+        success: true,
+        status: 'complete',
+        websiteType: websiteType || 'business',
+        discoveredConfig: {
+          collections: parsedConfig.collections.map(c => c.slug),
+          blocks: parsedConfig.blocks.map(b => b.slug),
+          globals: parsedConfig.globals?.map((g: any) => g.slug) || []
+        },
+        sampleContent,
+        message: `Discovered and generated sample content for ${parsedConfig.collections.length} collections, ${parsedConfig.blocks.length} blocks, and ${parsedConfig.globals?.length || 0} globals`
+      };
+    }
+
     // Initialize services
-    const configParser = new ConfigParser(projectPath + '/src/payload.config.ts');
     const payloadClient = new PayloadCMSClient({
       host: process.env['PAYLOAD_HOST'] || process.env['PAYLOAD_URL'] || 'http://localhost:3000',
+      apiKey: process.env['PAYLOAD_API_KEY'],
       email: process.env['PAYLOAD_USERNAME'] || process.env['PAYLOAD_EMAIL'],
       password: process.env['PAYLOAD_PASSWORD']
     });
@@ -117,9 +114,6 @@ export async function bootstrap(input: any): Promise<any> {
     const relationshipManager = new RelationshipManager(payloadClient, contentGenerator);
 
     try {
-      // Parse project configuration
-      const config = await configParser.parsePayloadConfig();
-      
       // Initialize PayloadCMS client
       await payloadClient.initialize();
 
@@ -134,188 +128,91 @@ export async function bootstrap(input: any): Promise<any> {
         media: []
       };
 
-      // Define core pages based on website type
-      const corePages = [
-        {
-          slug: 'home',
-          title: 'Home',
-          blocks: ['HeroSections', 'FeatureSections', 'Testimonials', 'Cta']
-        },
-        {
-          slug: 'about',
-          title: 'About Us',
-          blocks: ['HeaderSections', 'ContentSections', 'TeamSections']
-        },
-        {
-          slug: 'contact',
-          title: 'Contact',
-          blocks: ['ContactSections', 'FormBlock']
-        },
-        {
-          slug: 'privacy-policy',
-          title: 'Privacy Policy',
-          blocks: ['Content']
-        },
-        {
-          slug: 'terms-conditions',
-          title: 'Terms & Conditions',
-          blocks: ['Content']
-        },
-        {
-          slug: 'faq',
-          title: 'FAQ',
-          blocks: ['FAQS']
-        },
-        {
-          slug: 'search',
-          title: 'Search',
-          blocks: ['Content']
-        }
-      ];
+      // Generate pages based on discovered collections and blocks
+      const pagesCollection = parsedConfig.collections.find(c => c.slug === 'pages');
+      const availableBlocks = parsedConfig.blocks.map(b => b.slug);
+      
+      // Define core pages based on website type and available blocks
+      const corePages = generateCorePages(websiteType, availableBlocks, {
+        includeEcommerce,
+        includeBlog,
+        includeJobs
+      });
 
-      // Add conditional pages
-      if (websiteType === 'business' || websiteType === 'ecommerce') {
-        corePages.push({
-          slug: 'services',
-          title: 'Services',
-          blocks: ['HeaderSections', 'FeatureSections', 'PricingBlock', 'Cta']
-        });
-      }
+      // Generate content for discovered collections
+      const collectionsToPopulate = getCollectionsToPopulate(parsedConfig.collections, {
+        includeBlog,
+        includeJobs,
+        includeEcommerce
+      });
 
-      if (includeBlog) {
-        corePages.push({
-          slug: 'blog',
-          title: 'Blog',
-          blocks: ['BlogSections']
-        });
-      }
-
-      if (includeJobs) {
-        corePages.push({
-          slug: 'careers',
-          title: 'Careers',
-          blocks: ['JobsPageBlock', 'HeaderSections', 'TeamSections']
-        });
-      }
-
-      if (includeEcommerce) {
-        corePages.push({
-          slug: 'products',
-          title: 'Products',
-          blocks: ['ProductsPageBlock', 'HeaderSections']
-        });
-      }
-
-      // Generate content for each page
+      // Generate content for each collection
       const baseUrl = 'app.lumines.io';
       const pagesCreated = [];
 
-      for (const pageData of corePages) {
-        // Generate basic page content
-        const page = await payloadClient.create('pages', {
-          title: pageData.title,
-          slug: pageData.slug,
-          layout: pageData.blocks.map(blockType => ({
-            blockType,
-            id: `block-${Date.now()}-${Math.random()}`,
-            title: `Sample ${blockType}`,
-            content: `Sample content for ${blockType} block`
-          })),
-          meta: {
-            title: pageData.title,
-            description: `${pageData.title} page for ${businessInfo?.name || 'your business'}`
-          },
-          status: 'draft'
-        });
+      // Generate pages if pages collection exists
+      if (pagesCollection && corePages.length > 0) {
+        for (const pageData of corePages) {
+          const pageContent = await generatePageContent(pageData, pagesCollection, businessInfo, contentGenerator);
+          
+          try {
+            const page = await payloadClient.create('pages', pageContent);
+            
+            pagesCreated.push({
+              id: page.id,
+              slug: pageData.slug,
+              title: pageData.title,
+              url: pageData.slug === 'home' ? `${baseUrl}/` : `${baseUrl}/${pageData.slug}`,
+              blocks: pageData.blocks,
+              status: 'draft'
+            });
 
-        pagesCreated.push({
-          id: page.id,
-          slug: pageData.slug,
-          title: pageData.title,
-          url: pageData.slug === 'home' ? `${baseUrl}/` : `${baseUrl}/${pageData.slug}`,
-          blocks: pageData.blocks,
-          status: 'draft'
-        });
-
-        createdContent.pages.push(page);
+            createdContent.pages.push(page);
+          } catch (createError) {
+            console.warn(`Failed to create page ${pageData.slug}:`, createError);
+          }
+        }
       }
 
-      // Create supporting content
+      // Create supporting content for each discovered collection
       let supportingContentCounts: any = {};
 
-      if (includeBlog) {
-        // Create sample posts
-        for (let i = 0; i < 5; i++) {
-          const post = await payloadClient.create('posts', {
-            title: `Sample Blog Post ${i + 1}`,
-            slug: `sample-blog-post-${i + 1}`,
-            content: {
-              root: {
-                type: 'root',
-                children: [{
-                  type: 'paragraph',
-                  children: [{
-                    type: 'text',
-                    text: `This is sample content for blog post ${i + 1} for ${businessInfo?.name || 'your business'}.`
-                  }]
-                }]
-              }
-            },
-            status: 'draft'
-          });
-          createdContent.posts.push(post);
+      for (const collectionSlug of collectionsToPopulate) {
+        const collection = parsedConfig.collections.find(c => c.slug === collectionSlug);
+        if (!collection) continue;
+
+        const count = getContentCountForCollection(collectionSlug, {
+          includeBlog,
+          includeJobs,
+          includeEcommerce
+        });
+        
+        try {
+          for (let i = 0; i < count; i++) {
+            const content = await generateCollectionContent(
+              collection,
+              i + 1,
+              businessInfo,
+              contentGenerator
+            );
+            
+            const document = await payloadClient.create(collectionSlug, content);
+            
+            if (!createdContent[collectionSlug]) {
+              createdContent[collectionSlug] = [];
+            }
+            createdContent[collectionSlug].push(document);
+          }
+          
+          supportingContentCounts[collectionSlug] = count;
+        } catch (collectionError) {
+          console.warn(`Failed to create content for ${collectionSlug}:`, collectionError);
+          supportingContentCounts[collectionSlug] = 0;
         }
-        supportingContentCounts.posts = 5;
       }
-
-      if (includeJobs) {
-        // Create sample jobs
-        for (let i = 0; i < 3; i++) {
-          const job = await payloadClient.create('jobs', {
-            title: `Sample Job Position ${i + 1}`,
-            slug: `sample-job-${i + 1}`,
-            description: `Job description for position ${i + 1} at ${businessInfo?.name || 'your company'}.`,
-            status: 'draft'
-          });
-          createdContent.jobs.push(job);
-        }
-        supportingContentCounts.jobs = 3;
-      }
-
-      // Create team members
-      for (let i = 0; i < 4; i++) {
-        const member = await payloadClient.create('teamMember', {
-          name: `Team Member ${i + 1}`,
-          position: `Position ${i + 1}`,
-          bio: `Bio for team member ${i + 1}`
-        });
-        createdContent.teamMembers.push(member);
-      }
-      supportingContentCounts.teamMembers = 4;
-
-      // Create testimonials
-      for (let i = 0; i < 6; i++) {
-        const testimonial = await payloadClient.create('testimonials', {
-          name: `Customer ${i + 1}`,
-          testimonial: `Great experience with ${businessInfo?.name || 'this company'}!`,
-          rating: 5
-        });
-        createdContent.testimonials.push(testimonial);
-      }
-      supportingContentCounts.testimonials = 6;
-
-      // Create categories
-      for (let i = 0; i < 3; i++) {
-        const category = await payloadClient.create('categories', {
-          title: `Category ${i + 1}`,
-          slug: `category-${i + 1}`
-        });
-        createdContent.categories.push(category);
-      }
-      supportingContentCounts.categories = 3;
 
       // Create placeholder media
-      const mediaDoc = await uploadPlaceholderImage(payloadClient);
+      const mediaDoc = await uploadMainPlaceholderImage(payloadClient);
       createdContent.media.push(mediaDoc);
       supportingContentCounts.media = 1;
 
@@ -331,10 +228,17 @@ export async function bootstrap(input: any): Promise<any> {
 
       return {
         success: true,
+        status: 'complete',
         websiteType: websiteType || 'business',
         pagesCreated,
         supportingContent: supportingContentCounts,
-        globalsConfigured: ['header', 'footer', 'theme', 'settings'],
+        collectionsProcessed: collectionsToPopulate,
+        blocksAvailable: availableBlocks,
+        discoveredConfig: {
+          collections: parsedConfig.collections.map(c => c.slug),
+          blocks: parsedConfig.blocks.map(b => b.slug),
+          globals: parsedConfig.globals?.map((g: any) => g.slug) || []
+        },
         relationshipsCreated,
         executionTime,
         totalDocuments
@@ -387,19 +291,59 @@ export async function bootstrapFull(input: any): Promise<any> {
       validateLexicalContent = false,
       autoDiscoverCollections = true,
       handleCustomFields = true,
-      continueOnError = true
+      continueOnError = true,
+      step = 'discover_config',
+      configurationFiles
     } = input;
 
-    // Validate inputs
-    if (!projectPath) {
+    // Progressive context gathering - start with project discovery
+    const contextRequest: ContextGatheringRequest = {
+      projectPath,
+      step,
+      configurationFiles: configurationFiles?.map((file: any) => ({
+        path: file.path,
+        content: file.content,
+        type: file.type || 'config'
+      } as ConfigFile))
+    };
+
+    const contextResponse = await contextGatherer.gatherContext(contextRequest);
+
+    // Return early if we need more context
+    if (contextResponse.status === 'needs_context') {
       return {
         success: false,
-        error: 'Project path is required'
+        status: 'needs_context',
+        message: contextResponse.message,
+        requiredFiles: contextResponse.requiredFiles,
+        nextStep: contextResponse.nextStep,
+        discoveredConfig: contextResponse.discoveredConfig,
+        error: contextResponse.error
+      };
+    }
+
+    // If we don't have complete config yet, return in_progress
+    if (contextResponse.status === 'in_progress') {
+      return {
+        success: false,
+        status: 'in_progress',
+        message: contextResponse.message,
+        discoveredConfig: contextResponse.discoveredConfig,
+        parsedConfig: contextResponse.parsedConfig
+      };
+    }
+
+    // We have complete configuration - proceed with comprehensive content generation
+    const { parsedConfig, discoveredConfig } = contextResponse;
+    
+    if (!parsedConfig || !discoveredConfig) {
+      return {
+        success: false,
+        error: 'Missing parsed configuration data'
       };
     }
 
     // Initialize services
-    const configParser = new ConfigParser(projectPath + '/src/payload.config.ts');
     const payloadClient = new PayloadCMSClient({
       host: process.env['PAYLOAD_HOST'] || process.env['PAYLOAD_URL'] || 'http://localhost:3000',
       apiKey: process.env['PAYLOAD_API_KEY'],
@@ -410,9 +354,6 @@ export async function bootstrapFull(input: any): Promise<any> {
     const relationshipManager = new RelationshipManager(payloadClient, contentGenerator);
 
     try {
-      // Parse project configuration
-      const config = await configParser.parsePayloadConfig();
-      
       // Initialize PayloadCMS client
       await payloadClient.initialize();
 
@@ -456,30 +397,30 @@ export async function bootstrapFull(input: any): Promise<any> {
       let mediaReferences = 0;
       if (uploadPlaceholderMedia) {
         try {
-          // Upload multiple placeholder images for comprehensive testing
-          const uploadedImages = await uploadMultiplePlaceholderImages(payloadClient, 3);
+          // Upload single placeholder image
+          const uploadedImage = await uploadMainPlaceholderImage(payloadClient);
           
           mediaCreated = {
-            totalFiles: uploadedImages.length,
+            totalFiles: 1,
             formats: ['png'],
-            uploadedFiles: uploadedImages.map(img => img.filename),
-            mediaIds: uploadedImages.map(img => img.id)
+            uploadedFiles: [uploadedImage.filename],
+            mediaIds: [uploadedImage.id]
           };
-          mediaReferences = uploadedImages.length;
+          mediaReferences = 1;
           
           // Update documentsCreated to include the media
           if (!documentsCreated['media']) {
             documentsCreated['media'] = 0;
           }
-          documentsCreated['media'] += uploadedImages.length;
-          totalDocuments += uploadedImages.length;
+          documentsCreated['media'] += 1;
+          totalDocuments += 1;
           
         } catch (error) {
           console.warn('Failed to upload placeholder media in bootstrap-full:', error);
           mediaCreated = {
             totalFiles: 0,
             formats: [],
-            error: 'Failed to upload placeholder images'
+            error: 'Failed to upload placeholder image'
           };
           mediaReferences = 0;
         }
@@ -521,9 +462,12 @@ export async function bootstrapFull(input: any): Promise<any> {
                     slug: `sample-page-${i + 1}`,
                     layout: [{
                       blockType: 'HeroSections',
-                      title: `Hero ${i + 1}`,
-                      content: 'Sample hero content',
-                      backgroundImage: mediaCreated.mediaIds ? mediaCreated.mediaIds[i % mediaCreated.mediaIds.length] : undefined
+                      isDarkMode: false,
+                      title: `Sample Hero ${i + 1}`,
+                      layout: 'Simple centered',
+                      id: `block-${Date.now()}-${Math.random()}`,
+                      eyebrow: 'Sample Eyebrow',
+                      description: 'Sample hero description content'
                     }],
                     status: 'draft'
                   };
@@ -738,7 +682,6 @@ export async function getSampleContents(input: any): Promise<any> {
     }
 
     // Initialize services
-    const configParser = new ConfigParser(projectPath + '/src/payload.config.ts');
     const payloadClient = new PayloadCMSClient({
       host: process.env['PAYLOAD_HOST'] || process.env['PAYLOAD_URL'] || 'http://localhost:3000',
       apiKey: process.env['PAYLOAD_API_KEY'],
@@ -747,9 +690,6 @@ export async function getSampleContents(input: any): Promise<any> {
     });
 
     try {
-      // Parse project configuration
-      const config = await configParser.parsePayloadConfig();
-      
       // Initialize PayloadCMS client
       await payloadClient.initialize();
 
@@ -950,4 +890,287 @@ function generateSitemapXML(urls: any[]): string {
   return `<?xml version="1.0" encoding="UTF-8"?>
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">${urlElements}
 </urlset>`;
+}
+
+// Helper functions for progressive context gathering approach
+
+/**
+ * Generate core pages based on website type and available blocks
+ */
+function generateCorePages(
+  websiteType: string, 
+  availableBlocks: string[], 
+  options: { includeEcommerce: boolean; includeBlog: boolean; includeJobs: boolean }
+): Array<{ slug: string; title: string; blocks: string[] }> {
+  const corePages = [
+    {
+      slug: 'home',
+      title: 'Home',
+      blocks: filterAvailableBlocks(['HeroSections', 'FeatureSections', 'Testimonials', 'Cta'], availableBlocks)
+    },
+    {
+      slug: 'about',
+      title: 'About Us',
+      blocks: filterAvailableBlocks(['HeaderSections', 'ContentSections', 'TeamSections'], availableBlocks)
+    },
+    {
+      slug: 'contact',
+      title: 'Contact',
+      blocks: filterAvailableBlocks(['ContactSections', 'FormBlock'], availableBlocks)
+    },
+    {
+      slug: 'privacy-policy',
+      title: 'Privacy Policy',
+      blocks: filterAvailableBlocks(['Content'], availableBlocks)
+    },
+    {
+      slug: 'terms-conditions',
+      title: 'Terms & Conditions',
+      blocks: filterAvailableBlocks(['Content'], availableBlocks)
+    },
+    {
+      slug: 'faq',
+      title: 'FAQ',
+      blocks: filterAvailableBlocks(['FAQS'], availableBlocks)
+    }
+  ];
+
+  // Add conditional pages
+  if (websiteType === 'business' || websiteType === 'ecommerce') {
+    corePages.push({
+      slug: 'services',
+      title: 'Services',
+      blocks: filterAvailableBlocks(['HeaderSections', 'FeatureSections', 'PricingBlock', 'Cta'], availableBlocks)
+    });
+  }
+
+  if (options.includeBlog) {
+    corePages.push({
+      slug: 'blog',
+      title: 'Blog',
+      blocks: filterAvailableBlocks(['BlogSections'], availableBlocks)
+    });
+  }
+
+  if (options.includeJobs) {
+    corePages.push({
+      slug: 'careers',
+      title: 'Careers',
+      blocks: filterAvailableBlocks(['JobsPageBlock', 'HeaderSections', 'TeamSections'], availableBlocks)
+    });
+  }
+
+  if (options.includeEcommerce) {
+    corePages.push({
+      slug: 'products',
+      title: 'Products',
+      blocks: filterAvailableBlocks(['ProductsPageBlock', 'HeaderSections'], availableBlocks)
+    });
+  }
+
+  return corePages;
+}
+
+/**
+ * Filter requested blocks to only include available ones, with fallbacks
+ */
+function filterAvailableBlocks(requestedBlocks: string[], availableBlocks: string[]): string[] {
+  const result = requestedBlocks.filter(block => availableBlocks.includes(block));
+  
+  // If no blocks are available, return a generic content block or the first available
+  if (result.length === 0 && availableBlocks.length > 0) {
+    const fallbacks = ['Content', 'ContentSections', 'HeaderSections'];
+    const fallback = fallbacks.find(f => availableBlocks.includes(f)) || availableBlocks[0];
+    if (fallback) {
+      return [fallback];
+    }
+  }
+  
+  return result;
+}
+
+/**
+ * Get collections that should be populated based on configuration
+ */
+function getCollectionsToPopulate(
+  collections: PayloadCollection[], 
+  options: { includeBlog: boolean; includeJobs: boolean; includeEcommerce: boolean }
+): string[] {
+  const populate: string[] = [];
+  
+  for (const collection of collections) {
+    const slug = collection.slug;
+    
+    // Always include core collections
+    if (['categories', 'testimonials', 'teamMember', 'media'].includes(slug)) {
+      populate.push(slug);
+    }
+    
+    // Conditional collections
+    if (options.includeBlog && ['posts', 'categories'].includes(slug)) {
+      populate.push(slug);
+    }
+    
+    if (options.includeJobs && ['jobs'].includes(slug)) {
+      populate.push(slug);
+    }
+    
+    if (options.includeEcommerce && ['products', 'orders'].includes(slug)) {
+      populate.push(slug);
+    }
+  }
+  
+  // Remove duplicates
+  return [...new Set(populate)];
+}
+
+/**
+ * Get content count for each collection type
+ */
+function getContentCountForCollection(
+  collectionSlug: string, 
+  options: { includeBlog: boolean; includeJobs: boolean; includeEcommerce: boolean }
+): number {
+  const counts: Record<string, number> = {
+    posts: 5,
+    jobs: 3,
+    products: 8,
+    categories: 3,
+    testimonials: 6,
+    teamMember: 4,
+    media: 1
+  };
+  
+  return counts[collectionSlug] || 3;
+}
+
+/**
+ * Generate page content based on collection schema
+ */
+async function generatePageContent(
+  pageData: { slug: string; title: string; blocks: string[] },
+  pagesCollection: PayloadCollection,
+  businessInfo: any,
+  contentGenerator: ContentGenerator
+): Promise<any> {
+  const content: any = {
+    title: pageData.title,
+    slug: pageData.slug,
+    status: 'draft'
+  };
+  
+  // Generate meta fields if they exist
+  const metaField = pagesCollection.fields.find(f => f.name === 'meta');
+  if (metaField) {
+    content.meta = {
+      title: pageData.title,
+      description: `${pageData.title} page for ${businessInfo?.name || 'your business'}`
+    };
+  }
+  
+  // Generate layout/blocks if layout field exists
+  const layoutField = pagesCollection.fields.find(f => f.name === 'layout' || f.name === 'blocks');
+  if (layoutField && pageData.blocks.length > 0) {
+    content[layoutField.name] = pageData.blocks.map(blockType => ({
+      blockType,
+      id: `block-${Date.now()}-${Math.random()}`,
+      title: `Sample ${blockType}`,
+      content: `Sample content for ${blockType} block`
+    }));
+  }
+  
+  return content;
+}
+
+/**
+ * Generate content for any collection based on its schema
+ */
+async function generateCollectionContent(
+  collection: PayloadCollection,
+  index: number,
+  businessInfo: any,
+  contentGenerator: ContentGenerator
+): Promise<any> {
+  const content: any = {};
+  
+  // Generate content for each field
+  for (const field of collection.fields) {
+    if (field.name === 'id' || field.name === 'createdAt' || field.name === 'updatedAt') {
+      continue; // Skip system fields
+    }
+    
+    content[field.name] = await generateFieldContent(field, index, businessInfo, contentGenerator);
+  }
+  
+  return content;
+}
+
+/**
+ * Generate content for a specific field based on its type
+ */
+async function generateFieldContent(
+  field: any,
+  index: number,
+  businessInfo: any,
+  contentGenerator: ContentGenerator
+): Promise<any> {
+  switch (field.type) {
+    case 'text':
+      if (field.name === 'title' || field.name === 'name') {
+        return `Sample ${field.name} ${index}`;
+      }
+      if (field.name === 'slug') {
+        return `sample-${field.name}-${index}`;
+      }
+      return `Sample ${field.name} content`;
+      
+    case 'textarea':
+    case 'richText':
+      if (field.name === 'content' || field.name === 'description') {
+        return {
+          root: {
+            type: 'root',
+            children: [{
+              type: 'paragraph',
+              children: [{
+                type: 'text',
+                text: `This is sample ${field.name} for ${businessInfo?.name || 'your business'}.`
+              }]
+            }]
+          }
+        };
+      }
+      return `Sample ${field.name} content`;
+      
+    case 'number':
+      if (field.name === 'rating') {
+        return 5;
+      }
+      if (field.name === 'price') {
+        return Math.floor(Math.random() * 500) + 10;
+      }
+      return Math.floor(Math.random() * 100);
+      
+    case 'email':
+      return `sample${index}@example.com`;
+      
+    case 'select':
+      if (field.options && field.options.length > 0) {
+        return field.options[0].value || field.options[0];
+      }
+      return 'draft';
+      
+    case 'checkbox':
+      return true;
+      
+    case 'date':
+      return new Date().toISOString();
+      
+    case 'relationship':
+      // Skip relationship fields for now - they'll be resolved later
+      return null;
+      
+    default:
+      return `Sample ${field.name}`;
+  }
 }

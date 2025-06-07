@@ -8,15 +8,19 @@ import {
   ListToolsRequestSchema,
 } from '@modelcontextprotocol/sdk/types.js';
 import { bootstrap, bootstrapFull, getSampleContents } from './tools/bootstrap-tools.js';
+import { prepareContent, prepareContentTool } from './tools/prepare-tools.js';
+import { populateContent, populateContentTool } from './tools/populate-tools.js';
 
 // Load environment variables
 config();
 
 // Tool definitions
 const tools = [
+  prepareContentTool,
+  populateContentTool,
   {
     name: 'bootstrap',
-    description: 'Create essential business website pages (10+ pages) with practical block combinations. This tool creates all essential pages for a business website including Home, About, Services, Contact, Blog, Privacy Policy, Terms & Conditions, FAQ, and more based on website type and requirements.',
+    description: 'Create essential business website pages with progressive context gathering. This tool dynamically discovers PayloadCMS project configuration and generates content based on actual collections and blocks found in the project.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -64,6 +68,25 @@ const tools = [
           type: 'boolean',
           description: 'Automatically resolve content relationships',
           default: true
+        },
+        step: {
+          type: 'string',
+          enum: ['discover_config', 'generate_content'],
+          description: 'Progressive context gathering step',
+          default: 'discover_config'
+        },
+        configurationFiles: {
+          type: 'array',
+          description: 'Configuration files content for multi-step operations',
+          items: {
+            type: 'object',
+            properties: {
+              path: { type: 'string', description: 'File path' },
+              content: { type: 'string', description: 'File content' },
+              type: { type: 'string', enum: ['config', 'collection', 'block', 'global'], description: 'File type' }
+            },
+            required: ['path', 'content']
+          }
         }
       },
       required: ['projectPath']
@@ -71,7 +94,7 @@ const tools = [
   },
   {
     name: 'bootstrap-full',
-    description: 'Create comprehensive dataset with all collections and block variations. This tool generates extensive sample content across all available collections with multiple layout variations for testing and development purposes.',
+    description: 'Create comprehensive dataset with all discovered collections and block variations using progressive context gathering. This tool dynamically discovers project configuration and generates extensive content based on actual schema.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -84,7 +107,7 @@ const tools = [
             { type: 'string', enum: ['all'] },
             { type: 'array', items: { type: 'string' } }
           ],
-          description: 'Collections to include: "all" or array of collection slugs',
+          description: 'Collections to include: "all" or array of discovered collection slugs',
           default: 'all'
         },
         blocksPerCollection: {
@@ -96,7 +119,7 @@ const tools = [
         },
         includeAllLayoutVariations: {
           type: 'boolean',
-          description: 'Create all available layout variations for blocks',
+          description: 'Create all available layout variations for discovered blocks',
           default: true
         },
         createRelationships: {
@@ -119,6 +142,25 @@ const tools = [
           type: 'boolean',
           description: 'Continue processing if some operations fail',
           default: true
+        },
+        step: {
+          type: 'string',
+          enum: ['discover_config', 'generate_content'],
+          description: 'Progressive context gathering step',
+          default: 'discover_config'
+        },
+        configurationFiles: {
+          type: 'array',
+          description: 'Configuration files content for multi-step operations',
+          items: {
+            type: 'object',
+            properties: {
+              path: { type: 'string', description: 'File path' },
+              content: { type: 'string', description: 'File content' },
+              type: { type: 'string', enum: ['config', 'collection', 'block', 'global'], description: 'File type' }
+            },
+            required: ['path', 'content']
+          }
         }
       },
       required: ['projectPath']
@@ -126,7 +168,7 @@ const tools = [
   },
   {
     name: 'get-sample-contents',
-    description: 'Retrieve and export all sample content URLs and metadata from a PayloadCMS project. This tool queries existing collections and returns formatted content listings with URLs, metadata, and export options.',
+    description: 'Retrieve and export all content URLs and metadata from a PayloadCMS project using progressive context gathering. This tool dynamically discovers collections and returns formatted content listings based on actual project schema.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -137,7 +179,7 @@ const tools = [
         collections: {
           type: 'array',
           items: { type: 'string' },
-          description: 'Specific collections to include (optional, defaults to all)'
+          description: 'Specific collections to include (optional, uses discovered collections by default)'
         },
         groupByCollection: {
           type: 'boolean',
@@ -169,143 +211,28 @@ const tools = [
           type: 'object',
           description: 'Custom URL patterns for specific collections',
           additionalProperties: { type: 'string' }
+        },
+        step: {
+          type: 'string',
+          enum: ['discover_config', 'generate_content'],
+          description: 'Progressive context gathering step',
+          default: 'discover_config'
+        },
+        configurationFiles: {
+          type: 'array',
+          description: 'Configuration files content for multi-step operations',
+          items: {
+            type: 'object',
+            properties: {
+              path: { type: 'string', description: 'File path' },
+              content: { type: 'string', description: 'File content' },
+              type: { type: 'string', enum: ['config', 'collection', 'block', 'global'], description: 'File type' }
+            },
+            required: ['path', 'content']
+          }
         }
       },
       required: ['projectPath']
-    }
-  },
-  {
-    name: 'createBlockSampleContent',
-    description: 'Generate sample content for PayloadCMS block configurations',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        blockSlug: { 
-          type: 'string', 
-          description: 'The block type identifier' 
-        },
-        collectionSlug: { 
-          type: 'string', 
-          description: 'The collection containing the block' 
-        },
-        variations: { 
-          type: 'number', 
-          description: 'Number of content variations to generate',
-          default: 1 
-        },
-        includeOptional: { 
-          type: 'boolean', 
-          description: 'Include optional fields',
-          default: true 
-        },
-        locale: { 
-          type: 'string', 
-          description: 'Content locale',
-          default: 'en' 
-        }
-      },
-      required: ['blockSlug', 'collectionSlug']
-    }
-  },
-  {
-    name: 'createCollectionSampleContent',
-    description: 'Generate complete sample documents for PayloadCMS collections',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        collectionSlug: { 
-          type: 'string', 
-          description: 'The collection identifier' 
-        },
-        count: { 
-          type: 'number', 
-          description: 'Number of documents to create',
-          default: 3 
-        },
-        includeOptional: { 
-          type: 'boolean', 
-          description: 'Include optional fields',
-          default: true 
-        },
-        locale: { 
-          type: 'string', 
-          description: 'Content locale',
-          default: 'en' 
-        }
-      },
-      required: ['collectionSlug']
-    }
-  },
-  {
-    name: 'getSampleContent',
-    description: 'Query existing collections and blocks to understand data structure',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        collectionSlug: { 
-          type: 'string', 
-          description: 'Specific collection to query' 
-        },
-        limit: { 
-          type: 'number', 
-          description: 'Maximum results to return',
-          default: 10 
-        },
-        fields: { 
-          type: 'array', 
-          items: { type: 'string' },
-          description: 'Specific fields to include' 
-        }
-      }
-    }
-  },
-  {
-    name: 'createRelationalContent',
-    description: 'Create content with automatic dependency resolution',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        targetCollection: { 
-          type: 'string', 
-          description: 'Main collection to create content for' 
-        },
-        count: { 
-          type: 'number', 
-          description: 'Number of documents to create',
-          default: 1 
-        },
-        createDependencies: { 
-          type: 'boolean', 
-          description: 'Auto-create related content',
-          default: true 
-        },
-        dependencyDepth: { 
-          type: 'number', 
-          description: 'Maximum relationship depth',
-          default: 3 
-        }
-      },
-      required: ['targetCollection']
-    }
-  },
-  {
-    name: 'convertToRichtext',
-    description: 'Convert plain text, HTML, or markdown to Lexical rich text format',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        content: { 
-          type: 'string', 
-          description: 'Content to convert' 
-        },
-        format: { 
-          type: 'string', 
-          enum: ['plaintext', 'html', 'markdown'],
-          description: 'Input format',
-          default: 'plaintext' 
-        }
-      },
-      required: ['content']
     }
   }
 ];
@@ -341,6 +268,12 @@ class PayloadCMSMCPServer {
 
       try {
         switch (name) {
+          case 'prepare-content':
+            return await this.handlePrepareContent(args);
+          
+          case 'populate-content':
+            return await this.handlePopulateContent(args);
+            
           case 'bootstrap':
             return await this.handleBootstrap(args);
           
@@ -349,21 +282,6 @@ class PayloadCMSMCPServer {
           
           case 'get-sample-contents':
             return await this.handleGetSampleContents(args);
-          
-          case 'createBlockSampleContent':
-            return await this.handleCreateBlockSampleContent(args);
-          
-          case 'createCollectionSampleContent':
-            return await this.handleCreateCollectionSampleContent(args);
-          
-          case 'getSampleContent':
-            return await this.handleGetSampleContent(args);
-          
-          case 'createRelationalContent':
-            return await this.handleCreateRelationalContent(args);
-          
-          case 'convertToRichtext':
-            return await this.handleConvertToRichtext(args);
           
           default:
             throw new Error(`Unknown tool: ${name}`);
@@ -379,6 +297,52 @@ class PayloadCMSMCPServer {
         };
       }
     });
+  }
+
+  private async handlePrepareContent(args: any) {
+    try {
+      const result = await prepareContent(args);
+      return {
+        content: [
+          {
+            type: 'text',
+            text: JSON.stringify(result, null, 2),
+          },
+        ],
+      };
+    } catch (error) {
+      return {
+        content: [
+          {
+            type: 'text',
+            text: `Error in prepare-content: ${error instanceof Error ? error.message : 'Unknown error'}`,
+          },
+        ],
+      };
+    }
+  }
+
+  private async handlePopulateContent(args: any) {
+    try {
+      const result = await populateContent(args);
+      return {
+        content: [
+          {
+            type: 'text',
+            text: JSON.stringify(result, null, 2),
+          },
+        ],
+      };
+    } catch (error) {
+      return {
+        content: [
+          {
+            type: 'text',
+            text: `Error in populate-content: ${error instanceof Error ? error.message : 'Unknown error'}`,
+          },
+        ],
+      };
+    }
   }
 
   private async handleBootstrap(args: any) {
@@ -450,140 +414,6 @@ class PayloadCMSMCPServer {
     }
   }
 
-  private async handleCreateBlockSampleContent(args: any) {
-    const { blockSlug, collectionSlug, variations = 1 } = args;
-    
-    // Placeholder implementation
-    const sampleData = {
-      blockType: blockSlug,
-      content: `Sample content for ${blockSlug} block in ${collectionSlug} collection`,
-      generated: new Date().toISOString(),
-      variations: variations
-    };
-
-    return {
-      content: [
-        {
-          type: 'text',
-          text: JSON.stringify(sampleData, null, 2),
-        },
-      ],
-    };
-  }
-
-  private async handleCreateCollectionSampleContent(args: any) {
-    const { collectionSlug, count = 3 } = args;
-    
-    // Placeholder implementation
-    const sampleData = {
-      collection: collectionSlug,
-      documentsCreated: count,
-      sampleDocument: {
-        id: 'sample-id-123',
-        title: `Sample ${collectionSlug} document`,
-        createdAt: new Date().toISOString(),
-        content: `This is sample content for the ${collectionSlug} collection`
-      }
-    };
-
-    return {
-      content: [
-        {
-          type: 'text',
-          text: JSON.stringify(sampleData, null, 2),
-        },
-      ],
-    };
-  }
-
-  private async handleGetSampleContent(args: any) {
-    const { collectionSlug, limit = 10 } = args;
-    
-    // Placeholder implementation
-    const sampleData = {
-      collection: collectionSlug || 'all',
-      limit: limit,
-      message: 'This is a placeholder. Connect to your PayloadCMS instance to get real data.',
-      sampleStructure: {
-        docs: [],
-        totalDocs: 0,
-        totalPages: 0
-      }
-    };
-
-    return {
-      content: [
-        {
-          type: 'text',
-          text: JSON.stringify(sampleData, null, 2),
-        },
-      ],
-    };
-  }
-
-  private async handleCreateRelationalContent(args: any) {
-    const { targetCollection, count = 1, createDependencies = true } = args;
-    
-    // Placeholder implementation
-    const sampleData = {
-      targetCollection: targetCollection,
-      documentsCreated: count,
-      dependenciesCreated: createDependencies,
-      message: 'Relational content creation placeholder. Implement with PayloadCMS integration.'
-    };
-
-    return {
-      content: [
-        {
-          type: 'text',
-          text: JSON.stringify(sampleData, null, 2),
-        },
-      ],
-    };
-  }
-
-  private async handleConvertToRichtext(args: any) {
-    const { content } = args;
-    
-    // Simple Lexical conversion placeholder
-    const lexicalContent = {
-      root: {
-        children: [
-          {
-            children: [
-              {
-                text: content,
-                type: 'text',
-                version: 1,
-                format: 0,
-                mode: 'normal',
-                style: '',
-              },
-            ],
-            direction: 'ltr',
-            format: '',
-            indent: 0,
-            type: 'paragraph',
-            version: 1,
-          },
-        ],
-        direction: 'ltr',
-        format: '',
-        indent: 0,
-        type: 'root',
-        version: 1,
-      },
-    };
-
-    return {
-      content: [
-        {
-          type: 'text',
-          text: JSON.stringify(lexicalContent, null, 2),
-        },
-      ],
-    };
-  }
 
   async run() {
     const transport = new StdioServerTransport();
