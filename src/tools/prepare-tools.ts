@@ -82,7 +82,7 @@ export interface FieldStructure {
   blocks?: string[]; // Block slugs for blocks field type
   options?: Array<{label: string; value: string}> | string[]; // For select fields
   fields?: FieldStructure[]; // For group, array, tabs fields
-  tabs?: Array<{label: string; fields: FieldStructure[]}>;
+  tabs?: Array<{label: string; name?: string; fields: FieldStructure[]}>;
 }
 
 /**
@@ -368,6 +368,7 @@ function buildFieldStructures(fields: PayloadField[]): FieldStructure[] {
     if (field.tabs) {
       structure.tabs = field.tabs.map(tab => ({
         label: tab.label,
+        ...(tab.name && { name: tab.name }),
         fields: buildFieldStructures(tab.fields)
       }));
     }
@@ -427,20 +428,42 @@ function generateFieldTemplateSchema(fields: FieldStructure[]): any {
   const schema: any = {};
 
   for (const field of fields) {
-    schema[field.name] = {
-      type: field.type,
-      required: field.required || false,
-      description: generateFieldDescription(field),
-      ...(field.options && { options: field.options }),
-      ...(field.relationTo && { relationTo: field.relationTo }),
-      ...(field.blocks && { availableBlocks: field.blocks }),
-      ...(field.fields && { nestedFields: generateFieldTemplateSchema(field.fields) }),
-      ...(field.tabs && { tabs: field.tabs.map(tab => ({
-        label: tab.label,
-        fields: generateFieldTemplateSchema(tab.fields)
-      })) }),
-      ...((field as any)._lexical && { _lexical: true })
-    };
+    // Special handling for tabs fields - flatten them into the parent schema
+    if (field.type === 'tabs' && field.tabs) {
+      // For tabs fields, flatten all tab fields into the parent schema
+      for (const tab of field.tabs) {
+        if (tab.name) {
+          // Named tab - create nested object
+          schema[tab.name] = {
+            type: 'group',
+            required: false,
+            description: `${tab.label} tab fields`,
+            nestedFields: generateFieldTemplateSchema(tab.fields)
+          };
+        } else {
+          // Unnamed tab - flatten fields
+          const tabSchema = generateFieldTemplateSchema(tab.fields);
+          Object.assign(schema, tabSchema);
+        }
+      }
+    } else if (field.name) {
+      // Only add fields that have a name
+      schema[field.name] = {
+        type: field.type,
+        required: field.required || false,
+        description: generateFieldDescription(field),
+        ...(field.options && { options: field.options }),
+        ...(field.relationTo && { relationTo: field.relationTo }),
+        ...(field.blocks && { availableBlocks: field.blocks }),
+        ...(field.fields && { nestedFields: generateFieldTemplateSchema(field.fields) }),
+        ...(field.tabs && { tabs: field.tabs.map(tab => ({
+          label: tab.label,
+          ...(tab.name && { name: tab.name }),
+          fields: generateFieldTemplateSchema(tab.fields)
+        })) }),
+        ...((field as any)._lexical && { _lexical: true })
+      };
+    }
   }
 
   return schema;
@@ -473,7 +496,27 @@ function generateSingleExampleDocument(structure: CollectionStructure | BlockStr
   // For other collections, generate basic template
   const example: any = {};
   for (const field of structure.fields) {
-    example[field.name] = generateFieldPlaceholder(field);
+    // Special handling for tabs fields - flatten them into the parent example
+    if (field.type === 'tabs' && field.tabs) {
+      for (const tab of field.tabs) {
+        if (tab.name) {
+          // Named tab - create nested object
+          const tabObject: any = {};
+          for (const tabField of tab.fields) {
+            tabObject[tabField.name] = generateFieldPlaceholder(tabField);
+          }
+          example[tab.name] = tabObject;
+        } else {
+          // Unnamed tab - flatten fields
+          for (const tabField of tab.fields) {
+            example[tabField.name] = generateFieldPlaceholder(tabField);
+          }
+        }
+      }
+    } else if (field.name) {
+      // Only add fields that have a name
+      example[field.name] = generateFieldPlaceholder(field);
+    }
   }
   
   return example;

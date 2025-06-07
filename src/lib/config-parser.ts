@@ -20,6 +20,7 @@ export interface PayloadField {
 
 export interface PayloadTab {
   label: string;
+  name?: string;
   fields: PayloadField[];
 }
 
@@ -713,6 +714,7 @@ export class ConfigParser {
     imports?: Map<string, string>
   ): Promise<PayloadTab | null> {
     let label = '';
+    let name: string | undefined;
     let fields: PayloadField[] = [];
 
     const labelProperty = this.findProperty(obj, 'label');
@@ -720,12 +722,17 @@ export class ConfigParser {
       label = labelProperty.text;
     }
 
+    const nameProperty = this.findProperty(obj, 'name');
+    if (nameProperty && ts.isStringLiteral(nameProperty)) {
+      name = nameProperty.text;
+    }
+
     const fieldsProperty = this.findProperty(obj, 'fields');
     if (fieldsProperty && ts.isArrayLiteralExpression(fieldsProperty)) {
       fields = await this.parseFieldsArray(fieldsProperty, baseDir, imports);
     }
 
-    return label ? { label, fields } : null;
+    return label ? { label, ...(name && { name }), fields } : null;
   }
 
   /**

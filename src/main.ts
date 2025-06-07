@@ -11,6 +11,7 @@ import { getSampleContents } from './tools/bootstrap-tools.js';
 import { prepareContent, prepareContentTool } from './tools/prepare-tools.js';
 import { populateContent, populateContentTool } from './tools/populate-tools.js';
 import { refactoredBootstrap } from './lib/refactored-bootstrap.js';
+import { bootstrapEnhancedSimple, bootstrapEnhancedSimpleTool } from './tools/bootstrap-enhanced-simple.js';
 
 // Load environment variables
 config();
@@ -19,6 +20,7 @@ config();
 const tools = [
   prepareContentTool,
   populateContentTool,
+  bootstrapEnhancedSimpleTool,
   {
     name: 'bootstrap-refactored',
     description: 'Multi-step bootstrap with context management, dependency resolution, and 8-call limit. Supports iterative content creation with smart relationship handling.',
@@ -340,6 +342,9 @@ class PayloadCMSMCPServer {
           case 'populate-content':
             return await this.handlePopulateContent(args);
             
+          case 'bootstrap-enhanced':
+            return await this.handleBootstrapEnhancedSimple(args);
+            
           case 'bootstrap-refactored':
             return await this.handleBootstrapRefactored(args);
             
@@ -409,6 +414,29 @@ class PayloadCMSMCPServer {
           {
             type: 'text',
             text: `Error in populate-content: ${error instanceof Error ? error.message : 'Unknown error'}`,
+          },
+        ],
+      };
+    }
+  }
+
+  private async handleBootstrapEnhancedSimple(args: any) {
+    try {
+      const result = await bootstrapEnhancedSimple(args);
+      return {
+        content: [
+          {
+            type: 'text',
+            text: JSON.stringify(result, null, 2),
+          },
+        ],
+      };
+    } catch (error) {
+      return {
+        content: [
+          {
+            type: 'text',
+            text: `Error in bootstrap-enhanced: ${error instanceof Error ? error.message : 'Unknown error'}`,
           },
         ],
       };
