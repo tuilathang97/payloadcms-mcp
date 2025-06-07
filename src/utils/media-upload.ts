@@ -83,8 +83,14 @@ export async function uploadPlaceholderImage(
  * Upload the main placeholder image (single upload)
  */
 export async function uploadMainPlaceholderImage(
-  payloadClient: PayloadCMSClient
+  payloadClient: PayloadCMSClient,
+  customFilename?: string
 ): Promise<UploadedMedia> {
+  if (customFilename) {
+    // Extract suffix from custom filename (remove extension)
+    const suffix = customFilename.replace(/\.[^/.]+$/, "");
+    return await uploadPlaceholderImage(payloadClient, suffix);
+  }
   return await uploadPlaceholderImage(payloadClient);
 }
 

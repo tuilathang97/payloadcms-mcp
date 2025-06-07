@@ -11,7 +11,7 @@ export interface PayloadField {
   hasMany?: boolean;
   admin?: any;
   fields?: PayloadField[];
-  blocks?: string[];
+  blocks?: string[] | PayloadBlock[];
   tabs?: PayloadTab[];
   maxRows?: number;
   minRows?: number;
@@ -51,6 +51,7 @@ export class ConfigParser {
   private configPath: string;
   private tsconfigPath: string | undefined;
   private compilerOptions: ts.CompilerOptions;
+  private blockCache: Map<string, PayloadBlock> = new Map();
 
   constructor(configPath: string, tsconfigPath?: string) {
     this.configPath = configPath;
@@ -138,11 +139,12 @@ export class ConfigParser {
     }
 
     const sourceFile = this.createSourceFile(configFilePath);
+    const imports = this.parseImports(sourceFile);
     
     // Find the collection export
     const collectionExport = this.findCollectionExport(sourceFile);
     if (collectionExport) {
-      return this.parseCollectionObject(collectionExport, path.dirname(configFilePath));
+      return await this.parseCollectionObject(collectionExport, path.dirname(configFilePath), imports);
     }
 
     return null;
@@ -161,7 +163,7 @@ export class ConfigParser {
     // Find the block export
     const blockExport = this.findBlockExport(sourceFile);
     if (blockExport) {
-      return this.parseBlockObject(blockExport, path.dirname(configFilePath));
+      return await this.parseBlockObject(blockExport, path.dirname(configFilePath));
     }
 
     return null;
@@ -266,7 +268,7 @@ export class ConfigParser {
       }
     } else if (ts.isObjectLiteralExpression(element)) {
       // Inline collection definition
-      return this.parseCollectionObject(element, baseDir);
+      return await this.parseCollectionObject(element, baseDir);
     }
     
     return null;
@@ -284,7 +286,7 @@ export class ConfigParser {
       }
     } else if (ts.isObjectLiteralExpression(element)) {
       // Inline block definition
-      return this.parseBlockObject(element, baseDir);
+      return await this.parseBlockObject(element, baseDir);
     }
     
     return null;
@@ -329,9 +331,169 @@ export class ConfigParser {
   }
 
   /**
+   * Parse imports from a source file
+   */
+  private parseImports(sourceFile: ts.SourceFile): Map<string, string> {
+    const imports = new Map<string, string>();
+
+    const visit = (node: ts.Node) => {
+      if (ts.isImportDeclaration(node) && node.moduleSpecifier && ts.isStringLiteral(node.moduleSpecifier)) {
+        const moduleSpecifier = node.moduleSpecifier.text;
+
+        if (node.importClause) {
+          // Handle named imports: import { ButtonBlock } from './path'
+          if (node.importClause.namedBindings && ts.isNamedImports(node.importClause.namedBindings)) {
+            for (const element of node.importClause.namedBindings.elements) {
+              imports.set(element.name.text, moduleSpecifier);
+            }
+          }
+
+          // Handle default imports: import ButtonBlock from './path'
+          if (node.importClause.name) {
+            imports.set(node.importClause.name.text, moduleSpecifier);
+          }
+        }
+      }
+
+      ts.forEachChild(node, visit);
+    };
+
+    visit(sourceFile);
+    return imports;
+  }
+
+  /**
+   * Resolve block configuration from identifier
+   */
+  private async resolveBlockFromIdentifier(
+    identifier: string,
+    imports: Map<string, string>,
+    baseDir: string
+  ): Promise<PayloadBlock | null> {
+    const moduleSpecifier = imports.get(identifier);
+    if (!moduleSpecifier) {
+      return null;
+    }
+
+    // Resolve the actual file path
+    const resolvedPath = this.resolveModulePath(moduleSpecifier, baseDir);
+    if (!resolvedPath) {
+      return null;
+    }
+
+    // Check cache first
+    if (this.blockCache.has(resolvedPath)) {
+      return this.blockCache.get(resolvedPath)!;
+    }
+
+    // Parse the block configuration
+    const block = await this.parseBlockConfig(resolvedPath);
+    if (block) {
+      this.blockCache.set(resolvedPath, block);
+    }
+
+    return block;
+  }
+
+  /**
+   * Parse blocks field with support for identifier references
+   */
+  private async parseBlocksField(
+    arr: ts.ArrayLiteralExpression,
+    imports: Map<string, string>,
+    baseDir: string
+  ): Promise<PayloadBlock[]> {
+    const blocks: PayloadBlock[] = [];
+
+    for (const element of arr.elements) {
+      let block: PayloadBlock | null = null;
+
+      if (ts.isStringLiteral(element)) {
+        // Handle string literal blocks (legacy)
+        block = {
+          slug: element.text,
+          fields: []
+        };
+      } else if (ts.isIdentifier(element)) {
+        // Handle imported block references
+        block = await this.resolveBlockFromIdentifier(element.text, imports, baseDir);
+      }
+
+      if (block) {
+        blocks.push(block);
+      }
+    }
+
+    return blocks;
+  }
+
+  /**
+   * Resolve module path to actual file path (enhanced version)
+   */
+  private resolveModulePath(moduleSpecifier: string, baseDir: string): string | null {
+    // Handle relative imports
+    if (moduleSpecifier.startsWith('./') || moduleSpecifier.startsWith('../')) {
+      const resolved = path.resolve(baseDir, moduleSpecifier);
+      const possibleExtensions = ['.ts', '.js'];
+      
+      for (const ext of possibleExtensions) {
+        const withExt = resolved + ext;
+        if (fs.existsSync(withExt)) {
+          return withExt;
+        }
+      }
+      
+      // Try index files
+      for (const ext of possibleExtensions) {
+        const indexPath = path.join(resolved, 'index' + ext);
+        if (fs.existsSync(indexPath)) {
+          return indexPath;
+        }
+      }
+    }
+
+    // Handle absolute imports with @ alias
+    if (moduleSpecifier.startsWith('@/')) {
+      const withoutAlias = moduleSpecifier.replace('@/', '');
+      // Find project root from baseDir
+      let projectRoot = baseDir;
+      // Keep going up until we find the project root (contains src directory)
+      while (projectRoot && !fs.existsSync(path.join(projectRoot, 'src'))) {
+        const parent = path.dirname(projectRoot);
+        if (parent === projectRoot) break; // Reached filesystem root
+        projectRoot = parent;
+      }
+      const srcPath = path.join(projectRoot, 'src', withoutAlias);
+      
+      const possibleExtensions = ['.ts', '.js'];
+      
+      for (const ext of possibleExtensions) {
+        const withExt = srcPath + ext;
+        if (fs.existsSync(withExt)) {
+          return withExt;
+        }
+      }
+      
+      // Try index files
+      for (const ext of possibleExtensions) {
+        const indexPath = path.join(srcPath, 'index' + ext);
+        if (fs.existsSync(indexPath)) {
+          return indexPath;
+        }
+      }
+    }
+
+    return null;
+  }
+
+  /**
    * Parse collection object literal
    */
-  private parseCollectionObject(obj: ts.ObjectLiteralExpression, baseDir: string): PayloadCollection {
+  private async parseCollectionObject(
+    obj: ts.ObjectLiteralExpression, 
+    baseDir: string, 
+    imports?: Map<string, string>
+  ): Promise<PayloadCollection> {
     const collection: PayloadCollection = {
       slug: '',
       fields: []
@@ -346,7 +508,7 @@ export class ConfigParser {
     // Extract fields
     const fieldsProperty = this.findProperty(obj, 'fields');
     if (fieldsProperty && ts.isArrayLiteralExpression(fieldsProperty)) {
-      collection.fields = this.parseFieldsArray(fieldsProperty, baseDir);
+      collection.fields = await this.parseFieldsArray(fieldsProperty, baseDir, imports);
     }
 
     // Extract labels
@@ -361,7 +523,7 @@ export class ConfigParser {
   /**
    * Parse block object literal
    */
-  private parseBlockObject(obj: ts.ObjectLiteralExpression, baseDir: string): PayloadBlock {
+  private async parseBlockObject(obj: ts.ObjectLiteralExpression, baseDir: string): Promise<PayloadBlock> {
     const block: PayloadBlock = {
       slug: '',
       fields: []
@@ -376,7 +538,7 @@ export class ConfigParser {
     // Extract fields
     const fieldsProperty = this.findProperty(obj, 'fields');
     if (fieldsProperty && ts.isArrayLiteralExpression(fieldsProperty)) {
-      block.fields = this.parseFieldsArray(fieldsProperty, baseDir);
+      block.fields = await this.parseFieldsArray(fieldsProperty, baseDir);
     }
 
     // Extract labels
@@ -391,12 +553,16 @@ export class ConfigParser {
   /**
    * Parse fields array
    */
-  private parseFieldsArray(arr: ts.ArrayLiteralExpression, baseDir: string): PayloadField[] {
+  private async parseFieldsArray(
+    arr: ts.ArrayLiteralExpression, 
+    baseDir: string, 
+    imports?: Map<string, string>
+  ): Promise<PayloadField[]> {
     const fields: PayloadField[] = [];
 
     for (const element of arr.elements) {
       if (ts.isObjectLiteralExpression(element)) {
-        const field = this.parseFieldObject(element, baseDir);
+        const field = await this.parseFieldObject(element, baseDir, imports);
         if (field) {
           fields.push(field);
         }
@@ -409,7 +575,11 @@ export class ConfigParser {
   /**
    * Parse field object
    */
-  private parseFieldObject(obj: ts.ObjectLiteralExpression, baseDir: string): PayloadField | null {
+  private async parseFieldObject(
+    obj: ts.ObjectLiteralExpression, 
+    baseDir: string, 
+    imports?: Map<string, string>
+  ): Promise<PayloadField | null> {
     const field: PayloadField = {
       name: '',
       type: ''
@@ -429,6 +599,10 @@ export class ConfigParser {
           case 'type':
             if (ts.isStringLiteral(value)) {
               field.type = value.text;
+              // Mark richtext fields with _lexical flag for content transformation
+              if (value.text === 'richText') {
+                (field as any)._lexical = true;
+              }
             }
             break;
           case 'required':
@@ -460,11 +634,14 @@ export class ConfigParser {
             break;
           case 'fields':
             if (ts.isArrayLiteralExpression(value)) {
-              field.fields = this.parseFieldsArray(value, baseDir);
+              field.fields = await this.parseFieldsArray(value, baseDir, imports);
             }
             break;
           case 'blocks':
-            if (ts.isArrayLiteralExpression(value)) {
+            if (ts.isArrayLiteralExpression(value) && imports) {
+              field.blocks = await this.parseBlocksField(value, imports, baseDir);
+            } else if (ts.isArrayLiteralExpression(value)) {
+              // Fallback to string parsing if no imports available
               const blocks: string[] = [];
               for (const element of value.elements) {
                 if (ts.isStringLiteral(element)) {
@@ -476,7 +653,7 @@ export class ConfigParser {
             break;
           case 'tabs':
             if (ts.isArrayLiteralExpression(value)) {
-              field.tabs = this.parseTabsArray(value, baseDir);
+              field.tabs = await this.parseTabsArray(value, baseDir, imports);
             }
             break;
           case 'options':
@@ -508,12 +685,16 @@ export class ConfigParser {
   /**
    * Parse tabs array
    */
-  private parseTabsArray(arr: ts.ArrayLiteralExpression, baseDir: string): PayloadTab[] {
+  private async parseTabsArray(
+    arr: ts.ArrayLiteralExpression, 
+    baseDir: string, 
+    imports?: Map<string, string>
+  ): Promise<PayloadTab[]> {
     const tabs: PayloadTab[] = [];
 
     for (const element of arr.elements) {
       if (ts.isObjectLiteralExpression(element)) {
-        const tab = this.parseTabObject(element, baseDir);
+        const tab = await this.parseTabObject(element, baseDir, imports);
         if (tab) {
           tabs.push(tab);
         }
@@ -526,7 +707,11 @@ export class ConfigParser {
   /**
    * Parse tab object
    */
-  private parseTabObject(obj: ts.ObjectLiteralExpression, baseDir: string): PayloadTab | null {
+  private async parseTabObject(
+    obj: ts.ObjectLiteralExpression, 
+    baseDir: string, 
+    imports?: Map<string, string>
+  ): Promise<PayloadTab | null> {
     let label = '';
     let fields: PayloadField[] = [];
 
@@ -537,7 +722,7 @@ export class ConfigParser {
 
     const fieldsProperty = this.findProperty(obj, 'fields');
     if (fieldsProperty && ts.isArrayLiteralExpression(fieldsProperty)) {
-      fields = this.parseFieldsArray(fieldsProperty, baseDir);
+      fields = await this.parseFieldsArray(fieldsProperty, baseDir, imports);
     }
 
     return label ? { label, fields } : null;

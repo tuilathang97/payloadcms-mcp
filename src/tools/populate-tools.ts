@@ -13,6 +13,7 @@
 import { PayloadCMSClient } from '../lib/payload-client.js';
 import { logger } from '../utils/logger.js';
 import { uploadMainPlaceholderImage } from '../utils/media-upload.js';
+import { stringToLexical, isValidLexical } from '../utils/lexical-transformer.js';
 import { PreparedContent, CollectionStructure, BlockStructure, FieldStructure } from './prepare-tools.js';
 
 export interface PopulateContentInput {
@@ -190,9 +191,14 @@ export async function populateContent(input: PopulateContentInput): Promise<Popu
         for (let i = 0; i < collectionRequest.count; i++) {
           try {
             // Use custom data if provided, otherwise generate from structure
-            const documentData = collectionRequest.customData && collectionRequest.customData[i] 
+            let documentData = collectionRequest.customData && collectionRequest.customData[i] 
               ? collectionRequest.customData[i]
               : generateDocumentData(collectionStructure, i + 1, preparedContent);
+
+            // Transform string values to Lexical format for richText fields
+            if (collectionRequest.customData && collectionRequest.customData[i]) {
+              documentData = transformLexicalFields(documentData, collectionStructure);
+            }
 
             if (options.dryRun) {
               // In dry run mode, just simulate success
@@ -363,9 +369,9 @@ function generateFieldValue(field: FieldStructure, index: number, preparedConten
     }
   }
 
-  // Use sample data from prepared content if available
-  if (preparedContent.sampleContent.collections && field.name in preparedContent.sampleContent.collections) {
-    return preparedContent.sampleContent.collections[field.name];
+  // Use template data from prepared content if available
+  if (preparedContent.contentTemplates.collections && field.name in preparedContent.contentTemplates.collections) {
+    return preparedContent.contentTemplates.collections[field.name];
   }
 
   // Fallback to basic generation
@@ -465,6 +471,94 @@ function createErrorResult(message: string, startTime: number): PopulateContentR
     }],
     message
   };
+}
+
+/**
+ * Transform string values to Lexical format for richText fields
+ */
+function transformLexicalFields(data: any, structure: CollectionStructure | BlockStructure): any {
+  if (!data || typeof data !== 'object') {
+    return data;
+  }
+
+  const transformed = { ...data };
+
+  for (const field of structure.fields) {
+    const fieldValue = transformed[field.name];
+    
+    if (fieldValue === undefined || fieldValue === null) {
+      continue;
+    }
+
+    // Transform richText fields marked with _lexical
+    if ((field as any)._lexical && typeof fieldValue === 'string') {
+      transformed[field.name] = stringToLexical(fieldValue);
+      continue;
+    }
+
+    // Handle nested structures
+    if (field.type === 'blocks' && Array.isArray(fieldValue)) {
+      transformed[field.name] = fieldValue.map((block: any) => {
+        if (block && block.blockType) {
+          // For blocks, we need to find the block structure and transform recursively
+          // This is a simplified version - in a complete implementation,
+          // we'd need access to all block structures
+          return transformBlockFields(block);
+        }
+        return block;
+      });
+    } else if (field.type === 'array' && Array.isArray(fieldValue)) {
+      // Handle array fields that might contain richText
+      if (field.fields) {
+        const arrayStructure = { fields: field.fields, type: 'array' } as any;
+        transformed[field.name] = fieldValue.map((item: any) => 
+          transformLexicalFields(item, arrayStructure)
+        );
+      }
+    } else if (field.type === 'group' && field.fields && typeof fieldValue === 'object') {
+      // Handle group fields that might contain richText
+      const groupStructure = { fields: field.fields, type: 'group' } as any;
+      transformed[field.name] = transformLexicalFields(fieldValue, groupStructure);
+    } else if (field.tabs && Array.isArray(field.tabs)) {
+      // Handle tab fields that might contain richText
+      for (const tab of field.tabs) {
+        if (fieldValue[tab.label] && tab.fields) {
+          const tabStructure = { fields: tab.fields, type: 'tab' } as any;
+          transformed[field.name] = {
+            ...transformed[field.name],
+            [tab.label]: transformLexicalFields(fieldValue[tab.label], tabStructure)
+          };
+        }
+      }
+    }
+  }
+
+  return transformed;
+}
+
+/**
+ * Transform fields within a block (simplified version)
+ */
+function transformBlockFields(block: any): any {
+  if (!block || typeof block !== 'object') {
+    return block;
+  }
+
+  const transformed = { ...block };
+
+  // Transform common richText field names
+  const commonRichTextFields = ['content', 'description', 'text', 'body', 'bio'];
+  
+  for (const fieldName of commonRichTextFields) {
+    if (transformed[fieldName] && typeof transformed[fieldName] === 'string') {
+      // Only transform if it's not already in Lexical format
+      if (!isValidLexical(transformed[fieldName])) {
+        transformed[fieldName] = stringToLexical(transformed[fieldName]);
+      }
+    }
+  }
+
+  return transformed;
 }
 
 // Export the tool definition for MCP

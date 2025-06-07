@@ -1,8 +1,11 @@
 /**
  * Bootstrap Tools for PayloadCMS MCP Server
  * 
- * Progressive context gathering implementation that dynamically discovers
- * and analyzes PayloadCMS project configurations before generating content
+ * Integrated two-phase content generation system:
+ * 1. Discovery Phase: Uses prepare-tools to analyze PayloadCMS configurations and return templates
+ * 2. Population Phase: Uses populate-tools to create actual content from filled templates
+ * 
+ * Supports both template-based AI workflow and legacy direct content generation
  */
 
 import { PayloadCMSClient } from '../lib/payload-client.js';
@@ -11,6 +14,35 @@ import { RelationshipManager } from '../lib/relationship-manager.js';
 import { contextGatherer, ContextGatheringRequest, ConfigFile } from '../lib/context-gatherer.js';
 import { PayloadConfig, PayloadCollection, PayloadBlock } from '../lib/config-parser.js';
 import { uploadMainPlaceholderImage } from '../utils/media-upload.js';
+import { prepareContent, PreparedContent } from './prepare-tools.js';
+import { populateContent } from './populate-tools.js';
+
+// Helper functions
+
+/**
+ * Convert filled templates from AI to populate-content format
+ */
+function mapFilledTemplatesToContentStructure(filledTemplates: any, preparedContent: PreparedContent): any {
+  const contentToCreate: any = {
+    collections: {},
+    generateRelationships: true,
+    createMediaAssets: true
+  };
+
+  // Map filled collection templates to content creation format
+  if (filledTemplates.collections) {
+    for (const [collectionSlug, items] of Object.entries(filledTemplates.collections)) {
+      if (Array.isArray(items) && items.length > 0) {
+        contentToCreate.collections[collectionSlug] = {
+          count: items.length,
+          customData: items
+        };
+      }
+    }
+  }
+
+  return contentToCreate;
+}
 
 // Tool implementations
 
@@ -26,7 +58,8 @@ export async function bootstrap(input: any): Promise<any> {
       contentQuality = 'medium',
       resolveRelationships = true,
       step = 'discover_config',
-      configurationFiles
+      configurationFiles,
+      filledTemplates
     } = input;
 
     // Progressive context gathering - start with project discovery
@@ -87,23 +120,63 @@ export async function bootstrap(input: any): Promise<any> {
       };
     }
 
-    // If step is discover_config, return the sample content structure without creating actual content
+    // If step is discover_config, use prepare-tools to return template structure
     if (step === 'discover_config') {
+      const preparedContent = await prepareContent({ projectPath });
+      
+      if (!preparedContent.success) {
+        return {
+          success: false,
+          error: 'Failed to prepare content templates',
+          details: preparedContent.message
+        };
+      }
+
       return {
         success: true,
         status: 'complete',
         websiteType: websiteType || 'business',
-        discoveredConfig: {
-          collections: parsedConfig.collections.map(c => c.slug),
-          blocks: parsedConfig.blocks.map(b => b.slug),
-          globals: parsedConfig.globals?.map((g: any) => g.slug) || []
-        },
-        sampleContent,
-        message: `Discovered and generated sample content for ${parsedConfig.collections.length} collections, ${parsedConfig.blocks.length} blocks, and ${parsedConfig.globals?.length || 0} globals`
+        discoveredConfig: preparedContent.discoveredConfig,
+        contentTemplates: preparedContent.contentTemplates,
+        parsedStructure: preparedContent.parsedStructure,
+        metadata: preparedContent.metadata,
+        message: `Bootstrap discovery complete: ${preparedContent.message}`
       };
     }
 
-    // Initialize services
+    // If filledTemplates are provided, use populate-content approach
+    if (filledTemplates) {
+      // First prepare the content structure
+      const preparedContent = await prepareContent({ projectPath });
+      
+      if (!preparedContent.success) {
+        return {
+          success: false,
+          error: 'Failed to prepare content templates for population',
+          details: preparedContent.message
+        };
+      }
+
+      // Convert filled templates to populate-content format
+      const contentToCreate = mapFilledTemplatesToContentStructure(filledTemplates, preparedContent);
+      contentToCreate.generateRelationships = resolveRelationships;
+      const populateResult = await populateContent({
+        preparedContent,
+        contentToCreate,
+        options: {
+          continueOnError: true,
+          validateBeforeCreate: true
+        }
+      });
+      
+      return {
+        status: 'populated',
+        websiteType: websiteType || 'business',
+        ...populateResult
+      };
+    }
+
+    // Initialize services for legacy content generation
     const payloadClient = new PayloadCMSClient({
       host: process.env['PAYLOAD_HOST'] || process.env['PAYLOAD_URL'] || 'http://localhost:3000',
       apiKey: process.env['PAYLOAD_API_KEY'],
@@ -293,7 +366,8 @@ export async function bootstrapFull(input: any): Promise<any> {
       handleCustomFields = true,
       continueOnError = true,
       step = 'discover_config',
-      configurationFiles
+      configurationFiles,
+      filledTemplates
     } = input;
 
     // Progressive context gathering - start with project discovery
@@ -333,13 +407,68 @@ export async function bootstrapFull(input: any): Promise<any> {
       };
     }
 
-    // We have complete configuration - proceed with comprehensive content generation
+    // We have complete configuration
     const { parsedConfig, discoveredConfig } = contextResponse;
     
     if (!parsedConfig || !discoveredConfig) {
       return {
         success: false,
         error: 'Missing parsed configuration data'
+      };
+    }
+
+    // If step is discover_config, use prepare-tools to return template structure
+    if (step === 'discover_config') {
+      const preparedContent = await prepareContent({ projectPath });
+      
+      if (!preparedContent.success) {
+        return {
+          success: false,
+          error: 'Failed to prepare content templates',
+          details: preparedContent.message
+        };
+      }
+
+      return {
+        success: true,
+        status: 'complete',
+        discoveredConfig: preparedContent.discoveredConfig,
+        contentTemplates: preparedContent.contentTemplates,
+        parsedStructure: preparedContent.parsedStructure,
+        metadata: preparedContent.metadata,
+        message: `Bootstrap-full discovery complete: ${preparedContent.message}`
+      };
+    }
+
+    // If filledTemplates are provided, use populate-content approach
+    if (filledTemplates) {
+      // First prepare the content structure
+      const preparedContent = await prepareContent({ projectPath });
+      
+      if (!preparedContent.success) {
+        return {
+          success: false,
+          error: 'Failed to prepare content templates for population',
+          details: preparedContent.message
+        };
+      }
+
+      // Convert filled templates to populate-content format
+      const contentToCreate = mapFilledTemplatesToContentStructure(filledTemplates, preparedContent);
+      contentToCreate.generateRelationships = createRelationships;
+      contentToCreate.createMediaAssets = uploadPlaceholderMedia;
+      const populateResult = await populateContent({
+        preparedContent,
+        contentToCreate,
+        options: {
+          continueOnError,
+          validateBeforeCreate: true
+        }
+      });
+      
+      return {
+        status: 'populated',
+        ...populateResult
       };
     }
 
@@ -439,8 +568,8 @@ export async function bootstrapFull(input: any): Promise<any> {
             // Create multiple pages with different block layouts
             documentsToCreate = Math.max(blocksPerCollection, 5);
             
-            // Track which block layouts are created
-            const blockTypes = ['HeroSections', 'FeatureSections', 'PricingBlock', 'TestimonialsBlockConfig', 'TeamSections', 'FAQS'];
+            // Track which block layouts are created - using actual config slugs
+            const blockTypes = ['heroSections', 'featureSections', 'pricingBlock', 'testimonials', 'teamSections', 'FAQS'];
             blockTypes.forEach(blockType => {
               if (!blocksCreated[blockType]) {
                 blocksCreated[blockType] = [];
@@ -461,7 +590,7 @@ export async function bootstrapFull(input: any): Promise<any> {
                     title: `Sample Page ${i + 1}`,
                     slug: `sample-page-${i + 1}`,
                     layout: [{
-                      blockType: 'HeroSections',
+                      blockType: 'heroSections',
                       isDarkMode: false,
                       title: `Sample Hero ${i + 1}`,
                       layout: 'Simple centered',
@@ -594,11 +723,11 @@ export async function bootstrapFull(input: any): Promise<any> {
           errors: []
         };
         result.availableBlocks = {
-          'HeroSections': 5,
-          'FeatureSections': 8,
-          'PricingBlock': 6,
-          'TestimonialsBlockConfig': 4,
-          'TeamSections': 3,
+          'heroSections': 5,
+          'featureSections': 8,
+          'pricingBlock': 6,
+          'testimonials': 4,
+          'teamSections': 3,
           'FAQS': 7
         };
       }
@@ -906,27 +1035,27 @@ function generateCorePages(
     {
       slug: 'home',
       title: 'Home',
-      blocks: filterAvailableBlocks(['HeroSections', 'FeatureSections', 'Testimonials', 'Cta'], availableBlocks)
+      blocks: filterAvailableBlocks(['heroSections', 'featureSections', 'testimonials', 'ctaBlock'], availableBlocks)
     },
     {
       slug: 'about',
       title: 'About Us',
-      blocks: filterAvailableBlocks(['HeaderSections', 'ContentSections', 'TeamSections'], availableBlocks)
+      blocks: filterAvailableBlocks(['headerSections', 'contentSections', 'teamSections'], availableBlocks)
     },
     {
       slug: 'contact',
       title: 'Contact',
-      blocks: filterAvailableBlocks(['ContactSections', 'FormBlock'], availableBlocks)
+      blocks: filterAvailableBlocks(['contactSections', 'formBlock'], availableBlocks)
     },
     {
       slug: 'privacy-policy',
       title: 'Privacy Policy',
-      blocks: filterAvailableBlocks(['Content'], availableBlocks)
+      blocks: filterAvailableBlocks(['content'], availableBlocks)
     },
     {
       slug: 'terms-conditions',
       title: 'Terms & Conditions',
-      blocks: filterAvailableBlocks(['Content'], availableBlocks)
+      blocks: filterAvailableBlocks(['content'], availableBlocks)
     },
     {
       slug: 'faq',
@@ -940,7 +1069,7 @@ function generateCorePages(
     corePages.push({
       slug: 'services',
       title: 'Services',
-      blocks: filterAvailableBlocks(['HeaderSections', 'FeatureSections', 'PricingBlock', 'Cta'], availableBlocks)
+      blocks: filterAvailableBlocks(['headerSections', 'featureSections', 'pricingBlock', 'ctaBlock'], availableBlocks)
     });
   }
 
@@ -948,7 +1077,7 @@ function generateCorePages(
     corePages.push({
       slug: 'blog',
       title: 'Blog',
-      blocks: filterAvailableBlocks(['BlogSections'], availableBlocks)
+      blocks: filterAvailableBlocks(['blogSections'], availableBlocks)
     });
   }
 
@@ -956,7 +1085,7 @@ function generateCorePages(
     corePages.push({
       slug: 'careers',
       title: 'Careers',
-      blocks: filterAvailableBlocks(['JobsPageBlock', 'HeaderSections', 'TeamSections'], availableBlocks)
+      blocks: filterAvailableBlocks(['jobsPage', 'headerSections', 'teamSections'], availableBlocks)
     });
   }
 
@@ -964,7 +1093,7 @@ function generateCorePages(
     corePages.push({
       slug: 'products',
       title: 'Products',
-      blocks: filterAvailableBlocks(['ProductsPageBlock', 'HeaderSections'], availableBlocks)
+      blocks: filterAvailableBlocks(['productsPage', 'headerSections'], availableBlocks)
     });
   }
 
@@ -979,7 +1108,7 @@ function filterAvailableBlocks(requestedBlocks: string[], availableBlocks: strin
   
   // If no blocks are available, return a generic content block or the first available
   if (result.length === 0 && availableBlocks.length > 0) {
-    const fallbacks = ['Content', 'ContentSections', 'HeaderSections'];
+    const fallbacks = ['content', 'contentSections', 'headerSections'];
     const fallback = fallbacks.find(f => availableBlocks.includes(f)) || availableBlocks[0];
     if (fallback) {
       return [fallback];

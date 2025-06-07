@@ -7,9 +7,10 @@ import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
 } from '@modelcontextprotocol/sdk/types.js';
-import { bootstrap, bootstrapFull, getSampleContents } from './tools/bootstrap-tools.js';
+import { getSampleContents } from './tools/bootstrap-tools.js';
 import { prepareContent, prepareContentTool } from './tools/prepare-tools.js';
 import { populateContent, populateContentTool } from './tools/populate-tools.js';
+import { refactoredBootstrap } from './lib/refactored-bootstrap.js';
 
 // Load environment variables
 config();
@@ -18,6 +19,69 @@ config();
 const tools = [
   prepareContentTool,
   populateContentTool,
+  {
+    name: 'bootstrap-refactored',
+    description: 'Multi-step bootstrap with context management, dependency resolution, and 8-call limit. Supports iterative content creation with smart relationship handling.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        step: {
+          type: 'string',
+          enum: ['discover_config', 'generate_content', 'resolve_dependencies'],
+          description: 'Bootstrap step: discover_config (prepare templates), generate_content (create with user content), resolve_dependencies (handle missing references)',
+          default: 'discover_config'
+        },
+        contextId: {
+          type: 'string',
+          description: 'Context ID from previous step (required for generate_content and resolve_dependencies steps)'
+        },
+        projectPath: {
+          type: 'string',
+          description: 'Absolute path to the PayloadCMS project directory'
+        },
+        userContent: {
+          type: 'object',
+          description: 'User-provided content structure for generate_content step',
+          properties: {
+            collections: {
+              type: 'object',
+              additionalProperties: {
+                type: 'array',
+                description: 'Array of content items for this collection'
+              }
+            }
+          }
+        },
+        dependencyContent: {
+          type: 'object',
+          description: 'Content to resolve missing dependencies for resolve_dependencies step',
+          properties: {
+            collections: {
+              type: 'object',
+              additionalProperties: {
+                type: 'array',
+                description: 'Array of dependency content items for this collection'
+              }
+            }
+          }
+        },
+        resolveRelationships: {
+          type: 'boolean',
+          description: 'Automatically resolve content relationships',
+          default: true
+        },
+        continueOnError: {
+          type: 'boolean',
+          description: 'Continue processing if some operations fail',
+          default: true
+        }
+      },
+      required: ['projectPath']
+    }
+  },
+  
+  // Legacy bootstrap tools - commented out in favor of bootstrap-refactored
+  /*
   {
     name: 'bootstrap',
     description: 'Create essential business website pages with progressive context gathering. This tool dynamically discovers PayloadCMS project configuration and generates content based on actual collections and blocks found in the project.',
@@ -166,6 +230,8 @@ const tools = [
       required: ['projectPath']
     }
   },
+  */
+  
   {
     name: 'get-sample-contents',
     description: 'Retrieve and export all content URLs and metadata from a PayloadCMS project using progressive context gathering. This tool dynamically discovers collections and returns formatted content listings based on actual project schema.',
@@ -274,11 +340,15 @@ class PayloadCMSMCPServer {
           case 'populate-content':
             return await this.handlePopulateContent(args);
             
-          case 'bootstrap':
-            return await this.handleBootstrap(args);
-          
-          case 'bootstrap-full':
-            return await this.handleBootstrapFull(args);
+          case 'bootstrap-refactored':
+            return await this.handleBootstrapRefactored(args);
+            
+          // Legacy bootstrap tools - commented out in favor of bootstrap-refactored
+          // case 'bootstrap':
+          //   return await this.handleBootstrap(args);
+          // 
+          // case 'bootstrap-full':
+          //   return await this.handleBootstrapFull(args);
           
           case 'get-sample-contents':
             return await this.handleGetSampleContents(args);
@@ -345,6 +415,31 @@ class PayloadCMSMCPServer {
     }
   }
 
+  private async handleBootstrapRefactored(args: any) {
+    try {
+      const result = await refactoredBootstrap.bootstrap(args);
+      return {
+        content: [
+          {
+            type: 'text',
+            text: JSON.stringify(result, null, 2),
+          },
+        ],
+      };
+    } catch (error) {
+      return {
+        content: [
+          {
+            type: 'text',
+            text: `Error in bootstrap-refactored: ${error instanceof Error ? error.message : 'Unknown error'}`,
+          },
+        ],
+      };
+    }
+  }
+
+  // Legacy bootstrap handlers - commented out in favor of bootstrap-refactored
+  /*
   private async handleBootstrap(args: any) {
     try {
       const result = await bootstrap(args);
@@ -390,6 +485,7 @@ class PayloadCMSMCPServer {
       };
     }
   }
+  */
 
   private async handleGetSampleContents(args: any) {
     try {

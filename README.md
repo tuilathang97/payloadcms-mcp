@@ -1,43 +1,115 @@
 # PayloadCMS MCP Server
 
-A Model Context Protocol (MCP) server for PayloadCMS integration, providing intelligent content generation with automatic project discovery and two-phase workflow.
+A Model Context Protocol (MCP) server for PayloadCMS integration, providing intelligent content generation with automatic project discovery and advanced multi-step workflow.
 
-> **Current Status**: ✅ Fully functional with improved two-phase architecture  
-> **Version**: 2.0.0 - Enhanced client interaction with prepare/populate workflow  
+> **Current Status**: ✅ Fully functional with refactored bootstrap architecture  
+> **Version**: 3.0.0 - Advanced context management with smart dependency resolution  
 > **Ready for**: Production use with any PayloadCMS project structure
 
 ## Overview
 
-This MCP server provides a sophisticated two-phase approach to PayloadCMS content generation, inspired by robust workflow patterns and designed for better client interaction and accuracy.
+This MCP server provides sophisticated multi-phase approaches to PayloadCMS content generation, with both traditional two-phase workflow and advanced context-managed multi-step operations for complex dependency handling.
 
 ### Key Features
 
-- 🎯 **Two-Phase Workflow**: Separate preparation and population phases for better client control
+- 🎯 **Advanced Multi-Step Bootstrap**: Context-managed workflow with smart dependency resolution
+- 🔄 **8-Call Limit Protection**: Prevents infinite loops with automatic call counting
+- 🧠 **Smart Dependency Analysis**: Automatically detects missing relationships and suggests content
+- 💾 **Context Management**: UUID-based state preservation across multiple operations  
 - 🔍 **Exact Config Mapping**: Uses actual slugs from config files (e.g., `featureSections` not `FeatureSections`)
 - 🧩 **Client-Agnostic Design**: Works with any PayloadCMS project structure without hardcoded assumptions
-- 📊 **Comprehensive Config Reading**: Automatically discovers and parses all collections, blocks, and globals
-- ✅ **Client Review Process**: Client can review and modify prepared content before creation
+- 🎨 **Reusable Media Management**: Automatically deduplicates placeholder images
+- ✅ **User-Driven Content**: Accept actual user content instead of generated placeholder text
 - 🛡️ **Robust Error Handling**: Graceful degradation and detailed error reporting
 - 📝 **Development Logging**: Comprehensive logging when `DEBUG=true` for troubleshooting
 
-## Recent Major Improvements (v2.0.0)
+## Recent Major Improvements (v3.0.0)
 
-### ✅ **Fixed Critical Issues**
-- **Endless Loop Problem**: Resolved infinite context gathering loops that plagued v1.x
-- **Slug Mismatch**: Now uses exact slugs from config files instead of transformed versions
-- **Authentication Issues**: Fixed 403 errors with proper JWT token authentication
-- **One-Shot Limitations**: Replaced problematic single-call approach with two-phase workflow
+### ✅ **Bootstrap Refactor - Advanced Context Management**
+- **Context-Managed Multi-Step Flow**: UUID-based context preservation across multiple operations
+- **Smart Dependency Resolution**: Automatic analysis and resolution of missing relationships
+- **8-Call Limit Protection**: Prevents infinite loops with automatic call counting and timeouts
+- **Reusable Media System**: Automatically reuses existing placeholder images to prevent duplicates
+- **User-Driven Content**: Accept actual user content instead of generating placeholder text
+- **Proper Lexical Format**: Generate rich text content matching PayloadCMS Lexical structure
 
-### 🚀 **Enhanced Architecture** 
-- **Better Client Interaction**: Clients can now review configurations before content creation
-- **Accurate Field Parsing**: Respects actual PayloadCMS field definitions from config files
-- **Improved Error Recovery**: No more all-or-nothing failures
-- **Development Logging**: Detailed logging system for debugging and monitoring
+### 🚀 **Enhanced Architecture (v3.0)** 
+- **Multi-Tool Approach**: `bootstrap-refactored` for advanced workflows, traditional tools still available
+- **Context Management**: UUID contexts with 2-hour expiration and automatic cleanup
+- **Dependency Analysis**: Smart detection of missing references with suggested content
+- **Media Management**: Caching and reuse system for placeholder images
+- **Iterative Creation**: Handle complex dependencies through multiple resolution steps
+
+### 🔄 **Previous Improvements (v2.0.0)**
+- **Endless Loop Problem**: Resolved infinite context gathering loops ✅
+- **Slug Mismatch**: Uses exact slugs from config files ✅  
+- **Authentication Issues**: Fixed 403 errors with proper JWT token authentication ✅
+- **Two-Phase Workflow**: Separate preparation and population phases ✅
 
 ## MCP Tools
 
-### **Phase 1: `prepare-content`** ⚡ *New & Recommended*
-Reads all PayloadCMS configurations and returns structured data for client review. This is the foundation of the improved workflow.
+### **🚀 `bootstrap-refactored`** ⚡ *Latest & Most Advanced*
+Advanced multi-step bootstrap with context management, dependency resolution, and 8-call limit protection. This is the most sophisticated tool for complex content creation scenarios.
+
+**Purpose:** Handle complex content creation with smart dependency resolution and user interaction through multiple steps.
+
+**Features:**
+- UUID-based context management with 8-call limit
+- Smart dependency analysis and resolution
+- Automatic media reuse and deduplication  
+- User-driven content acceptance
+- Proper Lexical rich text format generation
+- Iterative relationship resolution
+
+**Multi-Step Flow:**
+
+**Step 1 - discover_config:**
+```json
+{
+  "step": "discover_config",
+  "projectPath": "/path/to/project"
+}
+```
+Returns content templates and context ID for subsequent steps.
+
+**Step 2 - generate_content:**
+```json
+{
+  "step": "generate_content", 
+  "contextId": "uuid-from-step1",
+  "userContent": {
+    "collections": {
+      "products": [
+        {
+          "title": "My Product",
+          "price": 299,
+          "featuredImage": "hero.png",
+          "categories": ["Electronics"]
+        }
+      ]
+    }
+  }
+}
+```
+Either creates content immediately or identifies missing dependencies.
+
+**Step 3 - resolve_dependencies (if needed):**
+```json
+{
+  "step": "resolve_dependencies",
+  "contextId": "same-uuid", 
+  "dependencyContent": {
+    "collections": {
+      "categories": [{"title": "Electronics", "slug": "electronics"}],
+      "media": [{"filename": "hero.png"}]
+    }
+  }
+}
+```
+Creates missing dependencies first, then completes main content creation.
+
+### **Phase 1: `prepare-content`** ⚡ *Traditional Two-Phase*
+Reads all PayloadCMS configurations and returns structured data for client review. This is the foundation of the traditional two-phase workflow.
 
 **Purpose:** Discover, parse, and structure all PayloadCMS configurations without creating any documents.
 
@@ -98,20 +170,23 @@ Creates actual PayloadCMS documents using prepared content structure and client 
 }
 ```
 
-### **Legacy Tools** (Still Available)
+### **Legacy Tools** (Deprecated but Available)
 
-#### `bootstrap`
-Generate essential business website pages with progressive context gathering. 
+#### ~~`bootstrap`~~ and ~~`bootstrap-full`~~ 
+*These tools have been deprecated in favor of `bootstrap-refactored`.*
 
-*Note: This tool now uses the improved authentication and config parsing from v2.0, but the two-phase approach (`prepare-content` + `populate-content`) is recommended for better control.*
+The old bootstrap tools had several limitations:
+- No context management between calls
+- Limited dependency resolution  
+- No call limit protection
+- Less sophisticated relationship handling
 
-#### `bootstrap-full`
-Create comprehensive dataset with all discovered collections and block variations.
-
-*Note: For comprehensive content creation, use `prepare-content` followed by `populate-content` with appropriate collection specifications.*
+**Migration:** Use `bootstrap-refactored` for all new projects. It provides all the functionality of the old tools plus advanced features.
 
 #### `get-sample-contents`
 Retrieve and export all content URLs and metadata from a PayloadCMS project.
+
+*Note: This tool remains fully functional and useful for content auditing and export.*
 
 ## Quick Start
 
@@ -128,11 +203,61 @@ cp env.example .env
 # Edit .env with your PayloadCMS credentials
 ```
 
-### 2. **Basic Two-Phase Workflow**
+### 2. **Recommended: Advanced Bootstrap Workflow**
+
+**Step 1: Discover Configuration**
+```bash
+# Use your MCP client to call:
+{
+  "tool": "bootstrap-refactored",
+  "step": "discover_config",
+  "projectPath": "/path/to/your/payloadcms/project"
+}
+# Returns: contextId and content templates
+```
+
+**Step 2: Submit User Content**
+```bash
+{
+  "tool": "bootstrap-refactored", 
+  "step": "generate_content",
+  "contextId": "uuid-from-step1",
+  "userContent": {
+    "collections": {
+      "products": [
+        {
+          "title": "My Product",
+          "price": 299,
+          "featuredImage": "hero.png",
+          "categories": ["Electronics"]
+        }
+      ]
+    }
+  }
+}
+# Either creates content or requests dependencies
+```
+
+**Step 3: Resolve Dependencies (if needed)**
+```bash
+{
+  "tool": "bootstrap-refactored",
+  "step": "resolve_dependencies", 
+  "contextId": "same-uuid",
+  "dependencyContent": {
+    "collections": {
+      "categories": [{"title": "Electronics", "slug": "electronics"}],
+      "media": [{"filename": "hero.png"}]
+    }
+  }
+}
+# Creates dependencies then main content
+```
+
+### 3. **Alternative: Traditional Two-Phase Workflow**
 
 **Step 1: Prepare Content**
 ```bash
-# Use your MCP client to call:
 {
   "tool": "prepare-content",
   "projectPath": "/path/to/your/payloadcms/project"
@@ -141,7 +266,6 @@ cp env.example .env
 
 **Step 2: Review & Populate**
 ```bash
-# Review the prepared content, then call:
 {
   "tool": "populate-content",
   "preparedContent": { /* output from step 1 */ },
@@ -154,7 +278,7 @@ cp env.example .env
 }
 ```
 
-### 3. **Run the Server**
+### 4. **Run the Server**
 ```bash
 # Development mode with hot reload
 npm run dev
@@ -223,21 +347,34 @@ src/
 ├── tools/
 │   ├── prepare-tools.ts        # ⚡ Phase 1: Configuration preparation
 │   ├── populate-tools.ts       # ⚡ Phase 2: Document creation
-│   └── bootstrap-tools.ts      # Legacy tools (still functional)
+│   └── bootstrap-tools.ts      # Legacy tools (deprecated but functional)
 ├── lib/
 │   ├── payload-client.ts       # ✅ Enhanced PayloadCMS API client with JWT auth
 │   ├── context-gatherer.ts     # ✅ Fixed configuration discovery
 │   ├── config-parser.ts        # ✅ Accurate config file parsing
 │   ├── content-generator.ts    # Content generation utilities
-│   └── relationship-manager.ts # Dependency resolution
+│   ├── relationship-manager.ts # Legacy dependency resolution
+│   ├── context-manager.ts      # 🚀 NEW: UUID context management with 8-call limits
+│   ├── dependency-resolver.ts  # 🚀 NEW: Smart dependency analysis and resolution
+│   ├── media-manager.ts        # 🚀 NEW: Reusable media management with caching
+│   └── refactored-bootstrap.ts # 🚀 NEW: Advanced multi-step bootstrap implementation
 └── utils/
-    ├── logger.ts              # ⚡ New comprehensive logging system
+    ├── logger.ts              # ⚡ Comprehensive logging system
     └── media-upload.ts        # Media handling utilities
 ```
 
 ## Project History & Evolution
 
-### v2.0.0 - Two-Phase Architecture (Current)
+### v3.0.0 - Advanced Context Management (Current)
+- ✅ **Refactored Bootstrap Architecture** with sophisticated multi-step workflow
+- ✅ **Context Management System** with UUID-based state preservation  
+- ✅ **Smart Dependency Resolution** automatic analysis and iterative resolution
+- ✅ **8-Call Limit Protection** prevents infinite loops with automatic counting
+- ✅ **Reusable Media Management** caching and deduplication system
+- ✅ **User-Driven Content** accepts actual user content instead of placeholders
+- ✅ **Proper Lexical Format** generates rich text matching PayloadCMS structure
+
+### v2.0.0 - Two-Phase Architecture 
 - ✅ **Fixed endless loop issues** that plagued earlier versions
 - ✅ **Implemented two-phase workflow** for better client interaction  
 - ✅ **Fixed slug mapping** to use exact config values
@@ -384,4 +521,6 @@ MIT License - see LICENSE file for details.
 
 ---
 
-**🎯 Recommended Workflow**: Always use `prepare-content` first, review the output, then use `populate-content` for the best experience and control over your PayloadCMS content generation.
+**🎯 Recommended Workflow (v3.0)**: Use `bootstrap-refactored` for advanced content creation with dependency resolution and context management. For simpler scenarios, the traditional `prepare-content` + `populate-content` workflow remains fully supported.
+
+**🚀 New in v3.0**: Context-managed multi-step operations with smart dependency resolution and 8-call limit protection for robust content generation.

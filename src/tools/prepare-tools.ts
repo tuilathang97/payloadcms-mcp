@@ -28,7 +28,7 @@ export interface PreparedContent {
     blocks: Record<string, BlockStructure>;
     globals: Record<string, GlobalStructure>;
   };
-  sampleContent: {
+  contentTemplates: {
     collections: Record<string, any>;
     blocks: Record<string, any>;
     globals: Record<string, any>;
@@ -86,6 +86,47 @@ export interface FieldStructure {
 }
 
 /**
+ * Extract all PayloadBlock objects from collection fields recursively
+ */
+function extractBlocksFromCollections(collections: PayloadCollection[]): PayloadBlock[] {
+  const blocks: PayloadBlock[] = [];
+  const seenSlugs = new Set<string>();
+
+  function extractFromFields(fields: PayloadField[]) {
+    for (const field of fields) {
+      // Check if this field has blocks
+      if (field.blocks && Array.isArray(field.blocks)) {
+        for (const block of field.blocks) {
+          // If it's a PayloadBlock object (not just a string)
+          if (typeof block === 'object' && block.slug && !seenSlugs.has(block.slug)) {
+            blocks.push(block);
+            seenSlugs.add(block.slug);
+          }
+        }
+      }
+
+      // Recursively check nested fields
+      if (field.fields) {
+        extractFromFields(field.fields);
+      }
+
+      // Check tabs
+      if (field.tabs) {
+        for (const tab of field.tabs) {
+          extractFromFields(tab.fields);
+        }
+      }
+    }
+  }
+
+  for (const collection of collections) {
+    extractFromFields(collection.fields);
+  }
+
+  return blocks;
+}
+
+/**
  * Phase 1: Prepare Content Tool
  * Reads all PayloadCMS configurations and returns structured data for client review
  */
@@ -100,7 +141,7 @@ export async function prepareContent(input: any): Promise<PreparedContent> {
         success: false,
         discoveredConfig: { collections: [], blocks: [], globals: [] },
         parsedStructure: { collections: {}, blocks: {}, globals: {} },
-        sampleContent: { collections: {}, blocks: {}, globals: {} },
+        contentTemplates: { collections: {}, blocks: {}, globals: {} },
         metadata: {
           projectPath: '',
           configPath: '',
@@ -128,7 +169,7 @@ export async function prepareContent(input: any): Promise<PreparedContent> {
         success: false,
         discoveredConfig: { collections: [], blocks: [], globals: [] },
         parsedStructure: { collections: {}, blocks: {}, globals: {} },
-        sampleContent: { collections: {}, blocks: {}, globals: {} },
+        contentTemplates: { collections: {}, blocks: {}, globals: {} },
         metadata: {
           projectPath,
           configPath: '',
@@ -147,21 +188,27 @@ export async function prepareContent(input: any): Promise<PreparedContent> {
       throw new Error('Missing parsed configuration data');
     }
 
+    // Extract all blocks discovered during collection parsing
+    const discoveredBlocks = extractBlocksFromCollections(parsedConfig.collections);
+    
+    // Add discovered blocks to the main blocks array
+    const allBlocks = [...parsedConfig.blocks, ...discoveredBlocks];
+
     // Build structured output with EXACT slugs from config
     const parsedStructure = {
       collections: buildCollectionStructures(parsedConfig.collections),
-      blocks: buildBlockStructures(parsedConfig.blocks),
+      blocks: buildBlockStructures(allBlocks),
       globals: buildGlobalStructures(parsedConfig.globals || [])
     };
 
-    // Generate sample content that respects actual field structures
-    const sampleContent = generateStructuredSampleContent(parsedStructure);
+    // Generate template structures for AI to fill (not sample content)
+    const contentTemplates = generateStructuredTemplates(parsedStructure);
 
     const executionTime = `${Date.now() - startTime}ms`;
 
     logger.info('PrepareContent', 'Configuration preparation complete', {
       totalCollections: parsedConfig.collections.length,
-      totalBlocks: parsedConfig.blocks.length,
+      totalBlocks: allBlocks.length,
       totalGlobals: parsedConfig.globals?.length || 0,
       executionTime
     });
@@ -170,20 +217,20 @@ export async function prepareContent(input: any): Promise<PreparedContent> {
       success: true,
       discoveredConfig: {
         collections: parsedConfig.collections.map(c => c.slug),
-        blocks: parsedConfig.blocks.map(b => b.slug),
+        blocks: allBlocks.map(b => b.slug),
         globals: parsedConfig.globals?.map((g: any) => g.slug) || []
       },
       parsedStructure,
-      sampleContent,
+      contentTemplates,
       metadata: {
         projectPath,
         configPath: discoveredConfig.structure.configPath || '',
         totalCollections: parsedConfig.collections.length,
-        totalBlocks: parsedConfig.blocks.length,
+        totalBlocks: allBlocks.length,
         totalGlobals: parsedConfig.globals?.length || 0,
         preparationTime: executionTime
       },
-      message: `Successfully prepared configuration with ${parsedConfig.collections.length} collections, ${parsedConfig.blocks.length} blocks, and ${parsedConfig.globals?.length || 0} globals`
+      message: `Successfully prepared configuration with ${parsedConfig.collections.length} collections, ${allBlocks.length} blocks, and ${parsedConfig.globals?.length || 0} globals`
     };
 
   } catch (error) {
@@ -193,7 +240,7 @@ export async function prepareContent(input: any): Promise<PreparedContent> {
       success: false,
       discoveredConfig: { collections: [], blocks: [], globals: [] },
       parsedStructure: { collections: {}, blocks: {}, globals: {} },
-      sampleContent: { collections: {}, blocks: {}, globals: {} },
+      contentTemplates: { collections: {}, blocks: {}, globals: {} },
       metadata: {
         projectPath: input.projectPath || '',
         configPath: '',
@@ -282,6 +329,11 @@ function buildFieldStructures(fields: PayloadField[]): FieldStructure[] {
       admin: field.admin
     };
 
+    // Add _lexical marker for richText fields
+    if ((field as any)._lexical) {
+      (structure as any)._lexical = true;
+    }
+
     // Add type-specific properties
     if (field.relationTo) {
       structure.relationTo = field.relationTo;
@@ -291,7 +343,18 @@ function buildFieldStructures(fields: PayloadField[]): FieldStructure[] {
     }
 
     if (field.blocks) {
-      structure.blocks = Array.isArray(field.blocks) ? field.blocks : [field.blocks];
+      // Handle both string[] and PayloadBlock[] cases
+      if (Array.isArray(field.blocks)) {
+        if (field.blocks.length > 0 && typeof field.blocks[0] === 'string') {
+          structure.blocks = field.blocks as string[];
+        } else {
+          structure.blocks = (field.blocks as any[]).map((block: any) => 
+            typeof block === 'string' ? block : (block as any).slug
+          );
+        }
+      } else {
+        structure.blocks = [typeof field.blocks === 'string' ? field.blocks : (field.blocks as any).slug];
+      }
     }
 
     if (field.options) {
@@ -316,203 +379,197 @@ function buildFieldStructures(fields: PayloadField[]): FieldStructure[] {
 }
 
 /**
- * Generate sample content that respects actual field structures
+ * Generate template structures for AI to fill (not sample content)
  */
-function generateStructuredSampleContent(parsedStructure: any): any {
-  const sampleContent = {
+function generateStructuredTemplates(parsedStructure: any): any {
+  const templates = {
     collections: {} as any,
     blocks: {} as any,
     globals: {} as any
   };
 
-  // Generate sample content for collections
+  // Generate template structure for collections showing field schemas
   for (const [slug, structure] of Object.entries(parsedStructure.collections)) {
-    sampleContent.collections[slug] = generateSampleForStructure(structure as CollectionStructure);
+    templates.collections[slug] = generateTemplateForStructure(structure as CollectionStructure);
   }
 
-  // Generate sample content for blocks
+  // Generate template structure for blocks showing field schemas  
   for (const [slug, structure] of Object.entries(parsedStructure.blocks)) {
-    sampleContent.blocks[slug] = generateSampleForStructure(structure as BlockStructure);
+    templates.blocks[slug] = generateTemplateForStructure(structure as BlockStructure);
   }
 
-  // Generate sample content for globals
+  // Generate template structure for globals showing field schemas
   for (const [slug, structure] of Object.entries(parsedStructure.globals)) {
-    sampleContent.globals[slug] = generateSampleForStructure(structure as GlobalStructure);
+    templates.globals[slug] = generateTemplateForStructure(structure as GlobalStructure);
   }
 
-  return sampleContent;
+  return templates;
 }
 
 /**
- * Generate sample data for a specific structure (collection, block, or global)
+ * Generate template structure for AI to fill (collection, block, or global)
  */
-function generateSampleForStructure(structure: CollectionStructure | BlockStructure | GlobalStructure): any {
-  const sample = {
+function generateTemplateForStructure(structure: CollectionStructure | BlockStructure | GlobalStructure): any {
+  const template = {
     slug: structure.slug,
     labels: structure.labels,
-    sampleData: generateSampleFieldData(structure.fields)
+    fieldSchema: generateFieldTemplateSchema(structure.fields),
+    example: generateSingleExampleDocument(structure)
   };
 
-  return sample;
+  return template;
 }
 
 /**
- * Generate sample data for an array of field structures
+ * Generate field template schema for AI to understand structure
  */
-function generateSampleFieldData(fields: FieldStructure[]): any {
-  const sampleData: any = {};
+function generateFieldTemplateSchema(fields: FieldStructure[]): any {
+  const schema: any = {};
 
   for (const field of fields) {
-    sampleData[field.name] = generateSampleFieldValue(field);
+    schema[field.name] = {
+      type: field.type,
+      required: field.required || false,
+      description: generateFieldDescription(field),
+      ...(field.options && { options: field.options }),
+      ...(field.relationTo && { relationTo: field.relationTo }),
+      ...(field.blocks && { availableBlocks: field.blocks }),
+      ...(field.fields && { nestedFields: generateFieldTemplateSchema(field.fields) }),
+      ...(field.tabs && { tabs: field.tabs.map(tab => ({
+        label: tab.label,
+        fields: generateFieldTemplateSchema(tab.fields)
+      })) }),
+      ...((field as any)._lexical && { _lexical: true })
+    };
   }
 
-  return sampleData;
+  return schema;
 }
 
 /**
- * Generate sample value for a specific field based on its structure
+ * Generate a single example document based on landing-page-example.json format
  */
-function generateSampleFieldValue(field: FieldStructure): any {
-  const variants = ['sample', 'example', 'demo', 'test'];
-  const randomVariant = variants[Math.floor(Math.random() * variants.length)];
+function generateSingleExampleDocument(structure: CollectionStructure | BlockStructure | GlobalStructure): any {
+  if (structure.slug === 'pages') {
+    // Return a template similar to landing-page-example.json structure
+    return {
+      title: "[AI_FILL: Page title]",
+      slug: "[AI_FILL: URL slug]",
+      layout: [
+        {
+          blockType: "[AI_FILL: Choose from available blocks]",
+          // Fields will be filled based on selected block schema
+          id: "[AUTO_GENERATED]"
+        }
+      ],
+      meta: {
+        title: "[AI_FILL: SEO title]",
+        description: "[AI_FILL: SEO description]"
+      },
+      status: "draft"
+    };
+  }
 
+  // For other collections, generate basic template
+  const example: any = {};
+  for (const field of structure.fields) {
+    example[field.name] = generateFieldPlaceholder(field);
+  }
+  
+  return example;
+}
+
+/**
+ * Generate field description for AI understanding
+ */
+function generateFieldDescription(field: FieldStructure): string {
+  const descriptions: Record<string, string> = {
+    text: "Text input field",
+    textarea: "Multi-line text area",
+    richText: "Rich text editor with Lexical format",
+    number: "Numeric input",
+    email: "Email address",
+    select: "Dropdown selection",
+    checkbox: "Boolean true/false",
+    date: "Date in ISO format",
+    upload: "File upload reference",
+    relationship: "Reference to another document",
+    array: "Array of items",
+    group: "Grouped fields object",
+    blocks: "Array of block objects with blockType",
+    tabs: "Tabbed field grouping",
+    json: "JSON object",
+    code: "Code snippet",
+    point: "Geographic coordinates [lat, lng]"
+  };
+
+  const baseDesc = descriptions[field.type] || `${field.type} field`;
+  
+  if (field.required) {
+    return `${baseDesc} (required)`;
+  }
+  
+  return baseDesc;
+}
+
+/**
+ * Generate field placeholder for example document
+ */
+function generateFieldPlaceholder(field: FieldStructure): any {
   switch (field.type) {
     case 'text':
-      if (field.name === 'title' || field.name === 'name') {
-        return `${randomVariant} ${field.name}`;
-      }
-      if (field.name === 'slug') {
-        return `${randomVariant}-${field.name}`;
-      }
-      return `${randomVariant} ${field.name} content`;
-
+      return `[AI_FILL: ${field.name}]`;
     case 'textarea':
-      return `This is ${randomVariant} ${field.name} content. It can contain multiple lines of text.`;
-
     case 'richText':
-      return {
-        root: {
-          type: 'root',
-          children: [
-            {
-              type: 'paragraph',
-              children: [
-                {
-                  type: 'text',
-                  text: `This is ${randomVariant} rich text content for ${field.name}.`
-                }
-              ]
-            }
-          ]
-        }
-      };
-
+      return `[AI_FILL: ${field.name} content]`;
     case 'number':
-      if (field.name === 'price') {
-        return Math.floor(Math.random() * 500) + 10;
-      }
-      if (field.name === 'rating') {
-        return Math.floor(Math.random() * 5) + 1;
-      }
-      return Math.floor(Math.random() * 100);
-
+      return `[AI_FILL: ${field.name} number]`;
     case 'email':
-      return `${randomVariant}@example.com`;
-
+      return `[AI_FILL: email address]`;
     case 'select':
-      if (field.options && field.options.length > 0) {
-        const option = field.options[0];
-        if (typeof option === 'object' && 'value' in option) {
-          return option.value;
-        }
-        return option;
-      }
-      return 'draft';
-
+      return `[AI_FILL: Choose from options: ${field.options ? JSON.stringify(field.options) : 'see schema'}]`;
     case 'checkbox':
-      return Math.random() > 0.5;
-
+      return `[AI_FILL: true/false]`;
     case 'date':
-      return new Date().toISOString();
-
+      return `[AI_FILL: ISO date string]`;
     case 'upload':
-      return {
-        filename: `${randomVariant}-image.jpg`,
-        alt: `${randomVariant} image`,
-        url: `https://via.placeholder.com/800x600?text=${randomVariant}`
-      };
-
+      return `[AI_FILL: media document ID or reference]`;
     case 'relationship':
-      if (field.relationTo) {
-        if (Array.isArray(field.relationTo)) {
-          return {
-            relationTo: field.relationTo[0],
-            value: `${randomVariant}-id-123`
-          };
-        }
-        return `${randomVariant}-${field.relationTo}-id`;
-      }
-      return null;
-
+      return `[AI_FILL: ${field.relationTo} document ID]`;
     case 'array':
-      if (field.fields) {
-        return [generateSampleFieldData(field.fields)];
-      }
-      return [`${randomVariant} array item`];
-
+      return `[AI_FILL: Array of ${field.name}]`;
     case 'group':
       if (field.fields) {
-        return generateSampleFieldData(field.fields);
+        const groupObj: any = {};
+        for (const subField of field.fields) {
+          groupObj[subField.name] = generateFieldPlaceholder(subField);
+        }
+        return groupObj;
       }
-      return {};
-
+      return `[AI_FILL: ${field.name} object]`;
     case 'blocks':
-      if (field.blocks && field.blocks.length > 0) {
-        const randomBlock = field.blocks[Math.floor(Math.random() * field.blocks.length)];
-        return [
-          {
-            blockType: randomBlock, // Use EXACT block slug
-            id: `block-${Date.now()}-${Math.random()}`,
-            [`${randomVariant}Field`]: `${randomVariant} block content`
-          }
-        ];
-      }
-      return [];
-
+      return `[AI_FILL: Array of block objects with blockType from: ${field.blocks ? JSON.stringify(field.blocks) : 'see schema'}]`;
     case 'tabs':
       if (field.tabs) {
-        const tabData: any = {};
+        const tabObj: any = {};
         for (const tab of field.tabs) {
-          const tabSampleData = generateSampleFieldData(tab.fields);
-          Object.assign(tabData, tabSampleData);
+          for (const tabField of tab.fields) {
+            tabObj[tabField.name] = generateFieldPlaceholder(tabField);
+          }
         }
-        return tabData;
+        return tabObj;
       }
-      return {};
-
-    case 'json':
-      return {
-        [`${randomVariant}Key`]: `${randomVariant} value`,
-        nested: {
-          property: `${randomVariant} nested value`
-        }
-      };
-
-    case 'code':
-      return `// ${randomVariant} code\nconsole.log('${randomVariant}');`;
-
-    case 'point':
-      return [Math.random() * 180 - 90, Math.random() * 360 - 180]; // [lat, lng]
-
+      return `[AI_FILL: ${field.name} tabbed content]`;
     default:
-      return `${randomVariant} ${field.type} value`;
+      return `[AI_FILL: ${field.name}]`;
   }
 }
+
 
 // Export the tool definition for MCP
 export const prepareContentTool = {
   name: 'prepare-content',
-  description: 'Reads all PayloadCMS configurations and returns structured data for client review. This is Phase 1 of the two-phase approach - it discovers collections, blocks, and globals with their exact field structures, then generates sample content that respects the actual PayloadCMS configuration. The client can review and modify this before actual document creation.',
+  description: 'Analyzes PayloadCMS configuration and returns template structures for AI to fill. This is Phase 1 of the two-phase approach - it discovers collections, blocks, and globals with their exact field schemas, then generates empty templates with field descriptions and examples for AI content generation. The client fills these templates and sends them to populate-content tool.',
   inputSchema: {
     type: 'object',
     properties: {
